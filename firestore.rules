@@ -1,0 +1,70 @@
+rules_version = '2';
+
+// Office Tracker v2 security rules.
+// Paste into Firebase Console > Firestore Database > Rules and click Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function userDoc(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function me() { return get(userDoc(request.auth.uid)).data; }
+    function isActive() {
+      return signedIn() && exists(userDoc(request.auth.uid)) && me().get('disabled', false) != true;
+    }
+    function isAdmin() { return isActive() && me().role == 'ADMIN'; }
+    function isSelf(uid) { return signedIn() && request.auth.uid == uid; }
+    function setupPath() { return /databases/$(database)/documents/config/setup; }
+
+    // One-time organisation setup: the very first account becomes the administrator.
+    match /config/setup {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.adminUid == request.auth.uid
+        && getAfter(userDoc(request.auth.uid)).data.role == 'ADMIN';
+      allow update, delete: if false;
+    }
+
+    // App-wide settings (allowance rate, stay detection thresholds).
+    match /config/app {
+      allow read: if isActive();
+      allow write: if isAdmin();
+    }
+
+    match /users/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+      allow create: if isAdmin()
+        || (isSelf(uid)
+            && request.resource.data.role == 'ADMIN'
+            && !exists(setupPath())
+            && existsAfter(setupPath()));
+      allow update: if isAdmin()
+        || (isSelf(uid) && isActive()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['lastLoginAt', 'appVersion']));
+      allow delete: if isAdmin() && uid != request.auth.uid;
+
+      // Workdays, stays and GPS track chunks.
+      match /days/{date}/{document=**} {
+        allow read: if (isSelf(uid) && isActive()) || isAdmin();
+        allow write: if isSelf(uid) && isActive();
+      }
+      match /days/{date} {
+        allow read: if (isSelf(uid) && isActive()) || isAdmin();
+        allow write: if isSelf(uid) && isActive();
+      }
+    }
+
+    // Latest position and device status, one small document per employee.
+    match /live/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+      allow write: if isSelf(uid) && isActive();
+      allow delete: if isAdmin();
+    }
+
+    // Offices / client sites that stays are matched against.
+    match /places/{placeId} {
+      allow read: if isActive();
+      allow write: if isAdmin();
+    }
+  }
+}

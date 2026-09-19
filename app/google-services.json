@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "526663651148",
+    "project_id": "location-tracker-7ff7c",
+    "storage_bucket": "location-tracker-7ff7c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:526663651148:android:cdd8a403bc59fd272009e9",
+        "android_client_info": {
+          "package_name": "com.aistudio.officetracker.vmpjxq"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB9r6xja6YNspPQ-nPF9ykRKgHkB1gOM3U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
