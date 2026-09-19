@@ -52,6 +52,7 @@ import com.officetracker.ui.components.StatTile
 import com.officetracker.ui.components.StatusPill
 import com.officetracker.ui.components.color
 import com.officetracker.ui.components.label
+import com.officetracker.ui.components.rememberFeatures
 import com.officetracker.ui.components.rememberNow
 import com.officetracker.ui.theme.Brand
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -108,6 +109,7 @@ fun HistoryScreen(profile: UserProfile, onOpenDay: (String) -> Unit, onBack: (()
     val config by OfficeConfig.collect()
     val context = LocalContext.current
     val now = rememberNow()
+    val features by rememberFeatures()
 
     Scaffold(
         topBar = {
@@ -117,8 +119,10 @@ fun HistoryScreen(profile: UserProfile, onOpenDay: (String) -> Unit, onBack: (()
                     if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 actions = {
-                    IconButton(onClick = { context.startActivity(vm.export(profile, state)) }, enabled = state.days.isNotEmpty()) {
-                        Icon(Icons.Default.Share, contentDescription = "Export month")
+                    if (features.reports) {
+                        IconButton(onClick = { context.startActivity(vm.export(profile, state)) }, enabled = state.days.isNotEmpty()) {
+                            Icon(Icons.Default.Share, contentDescription = "Export month")
+                        }
                     }
                 },
             )
@@ -157,6 +161,7 @@ fun MonthSwitcher(month: YearMonth, onPrev: () -> Unit, onNext: () -> Unit) {
 
 @Composable
 fun MonthTotals(days: List<Workday>, ratePerKm: Double, now: Long) {
+    val features by rememberFeatures()
     val meters = days.sumOf { it.distanceMeters }
     val hours = days.sumOf { it.activeMillis(now) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -166,13 +171,18 @@ fun MonthTotals(days: List<Workday>, ratePerKm: Double, now: Long) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatTile("Distance", Format.distance(meters), Icons.Default.Route, Modifier.weight(1f), tint = Brand.Route)
-            StatTile("Allowance", Format.taka(Format.allowance(meters, ratePerKm)), Icons.Default.Payments, Modifier.weight(1f), tint = Brand.Warning)
+            if (features.allowance) {
+                StatTile("Allowance", Format.taka(Format.allowance(meters, ratePerKm)), Icons.Default.Payments, Modifier.weight(1f), tint = Brand.Warning)
+            } else {
+                StatTile("Avg / day", Format.distance(if (days.isEmpty()) 0.0 else meters / days.size), Icons.Default.Route, Modifier.weight(1f), tint = Brand.Warning)
+            }
         }
     }
 }
 
 @Composable
 fun WorkdayRow(d: Workday, visits: Int?, ratePerKm: Double, now: Long, onClick: () -> Unit) {
+    val features by rememberFeatures()
     SectionCard(Modifier.clickable(onClick = onClick), padding = PaddingValues(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -187,7 +197,7 @@ fun WorkdayRow(d: Workday, visits: Int?, ratePerKm: Double, now: Long, onClick: 
             Column(horizontalAlignment = Alignment.End) {
                 Text(Format.distance(d.distanceMeters), style = MaterialTheme.typography.titleSmall)
                 if (d.status.isOnDuty) StatusPill(d.status.label(), d.status.color())
-                else Text(Format.taka(Format.allowance(d.distanceMeters, ratePerKm)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else if (features.allowance) Text(Format.taka(Format.allowance(d.distanceMeters, ratePerKm)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

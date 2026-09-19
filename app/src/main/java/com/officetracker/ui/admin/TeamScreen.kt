@@ -63,6 +63,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.officetracker.AppContainer
+import com.officetracker.core.model.Company
 import com.officetracker.core.model.LiveState
 import com.officetracker.core.model.Role
 import com.officetracker.core.model.UserProfile
@@ -99,7 +100,7 @@ data class TeamMember(val profile: UserProfile, val live: LiveState?)
 
 enum class TeamFilter(val label: String) { ALL("All"), ON_DUTY("On duty"), PAUSED("Paused"), ALERTS("Alerts"), OFF("Off duty") }
 
-class TeamViewModel(private val c: AppContainer) : ViewModel() {
+class TeamViewModel(private val c: AppContainer, private val companyId: String) : ViewModel() {
     var message by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
         private set
@@ -107,19 +108,22 @@ class TeamViewModel(private val c: AppContainer) : ViewModel() {
         private set
 
     val members: StateFlow<List<TeamMember>> = combine(
-        c.users.observeUsers().catch { message = it.message; emit(emptyList()) },
-        c.org.observeLive().catch { emit(emptyList()) },
+        c.users.observeUsers(companyId).catch { message = it.message; emit(emptyList()) },
+        c.org.observeLive(companyId).catch { emit(emptyList()) },
     ) { users, live ->
         loaded = true
         val byUid = live.associateBy { it.uid }
         users.map { TeamMember(it, byUid[it.uid]) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    fun createEmployee(name: String, phone: String, password: String, department: String, role: Role, onDone: () -> Unit) {
+    fun createEmployee(company: Company, name: String, phone: String, password: String, department: String, role: Role, onDone: () -> Unit) {
         if (busy) return
         busy = true
         viewModelScope.launch {
-            c.users.createEmployee(name, phone, password, department, role)
+            c.users.createUser(
+                companyId = companyId, name = name, phone = phone, password = password, department = department, role = role,
+                limits = company.maxUsers to company.maxAdmins, counts = company.userCount to company.adminCount,
+            )
                 .onSuccess {
                     message = "${it.name} can now sign in with ${Phone.pretty(it.phone)} and the password you set."
                     onDone()
@@ -164,8 +168,9 @@ private fun TeamMember.hasAlert(now: Long): Boolean {
 }
 
 @Composable
-fun TeamScreen(onOpenEmployee: (String) -> Unit) {
-    val vm = appViewModel(key = "team") { TeamViewModel(it) }
+fun TeamScreen(company: Company, onOpenEmployee: (String) -> Unit) {
+    val vm = appViewModel(key = "team-${company.id}") { TeamViewModel(it, company.id) }
+    val features = company.features
     val members by vm.members.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val now = rememberNow()
@@ -180,12 +185,18 @@ fun TeamScreen(onOpenEmployee: (String) -> Unit) {
             TopAppBar(
                 title = { Text("Team") },
                 actions = {
-                    IconButton(onClick = { reporting = true }) { Icon(Icons.Default.Summarize, contentDescription = "Monthly team report") }
+                    Text(
+                        "${company.userCount}/${company.maxUsers} seats",
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (features.reports) {
+                        IconButton(onClick = { reporting = true }) { Icon(Icons.Default.Summarize, contentDescription = "Monthly team report") }
+                    }
                 },
             )
         },
         floatingActionButton = {
-            if (tab == 1) {
+            if (tab == 1 || !features.liveMap) {
                 ExtendedFloatingActionButton(
                     onClick = { adding = true },
                     icon = { Icon(Icons.Default.PersonAdd, contentDescription = null) },
@@ -195,14 +206,16 @@ fun TeamScreen(onOpenEmployee: (String) -> Unit) {
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            TabRow(selectedTabIndex = tab) {
-                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Live map") }, icon = { Icon(Icons.Default.Map, null) })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("People") }, icon = { Icon(Icons.AutoMirrored.Filled.List, null) })
+            if (features.liveMap) {
+                TabRow(selectedTabIndex = tab) {
+                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Live map") }, icon = { Icon(Icons.Default.Map, null) })
+                    Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("People") }, icon = { Icon(Icons.AutoMirrored.Filled.List, null) })
+                }
             }
             if (!vm.loaded) LinearProgressIndicator(Modifier.fillMaxWidth())
             Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { ScreenMessage(vm.message) { vm.message = null } }
             SummaryRow(members, now)
-            when (tab) {
+            when (if (features.liveMap) tab else 1) {
                 0 -> LiveMap(members, now, onOpenEmployee)
                 else -> PeopleList(
                     members = members.filter { m ->
@@ -211,15 +224,26 @@ fun TeamScreen(onOpenEmployee: (String) -> Unit) {
                             m.profile.department.contains(query, true))
                     },
                     now = now, query = query, onQuery = { query = it }, filter = filter, onFilter = { filter = it },
-                    onOpen = onOpenEmployee,
+                    onOpen = onOpenEmployee, showFakeGps = features.fakeGpsAlerts,
                 )
             }
         }
     }
 
     if (adding) {
-        AddEmployeeDialog(busy = vm.busy, onDismiss = { adding = false }) { name, phone, pass, dept, role ->
-            vm.createEmployee(name, phone, pass, dept, role) { adding = false }
+        if (!company.canAddUser) {
+            AlertDialog(
+                onDismissRequest = { adding = false },
+                title = { Text("User limit reached") },
+                text = { Text("Your ${company.planName} plan allows ${company.maxUsers} users. Upgrade your plan from Profile > Subscription to add more.") },
+                confirmButton = { TextButton(onClick = { adding = false }) { Text("OK") } },
+            )
+        } else {
+            AddEmployeeDialog(
+                busy = vm.busy, canAddAdmin = company.adminCount < company.maxAdmins, onDismiss = { adding = false },
+            ) { name, phone, pass, dept, role ->
+                vm.createEmployee(company, name, phone, pass, dept, role) { adding = false }
+            }
         }
     }
     if (reporting) {
@@ -274,6 +298,7 @@ private fun PeopleList(
     filter: TeamFilter,
     onFilter: (TeamFilter) -> Unit,
     onOpen: (String) -> Unit,
+    showFakeGps: Boolean,
 ) {
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
@@ -296,12 +321,12 @@ private fun PeopleList(
         if (members.isEmpty()) item {
             EmptyState(Icons.Default.Groups, "No one here", "Try another filter, or add an employee.")
         }
-        items(members, key = { it.profile.uid }) { m -> MemberCard(m, now) { onOpen(m.profile.uid) } }
+        items(members, key = { it.profile.uid }) { m -> MemberCard(m, now, showFakeGps) { onOpen(m.profile.uid) } }
     }
 }
 
 @Composable
-private fun MemberCard(m: TeamMember, now: Long, onClick: () -> Unit) {
+private fun MemberCard(m: TeamMember, now: Long, showFakeGps: Boolean, onClick: () -> Unit) {
     val l = m.live
     val color = if (m.profile.disabled) Brand.Muted else l.statusColor(now)
     SectionCard(Modifier.clickable(onClick = onClick), padding = PaddingValues(14.dp)) {
@@ -337,7 +362,7 @@ private fun MemberCard(m: TeamMember, now: Long, onClick: () -> Unit) {
                         }
                         Text(Format.distance(l.distanceMeters), style = MaterialTheme.typography.labelSmall)
                         if (!l.gpsEnabled) Icon(Icons.Default.GpsOff, "GPS off", Modifier.size(14.dp), tint = Brand.Danger)
-                        if (l.mockLocation) {
+                        if (l.mockLocation && showFakeGps) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Warning, null, Modifier.size(14.dp), tint = Brand.Danger)
                                 Text(" Fake GPS", style = MaterialTheme.typography.labelSmall, color = Brand.Danger)
@@ -355,6 +380,7 @@ private fun MemberCard(m: TeamMember, now: Long, onClick: () -> Unit) {
 @Composable
 private fun AddEmployeeDialog(
     busy: Boolean,
+    canAddAdmin: Boolean,
     onDismiss: () -> Unit,
     onCreate: (String, String, String, String, Role) -> Unit,
 ) {
@@ -384,7 +410,10 @@ private fun AddEmployeeDialog(
                 OutlinedTextField(department, { department = it.take(40) }, label = { Text("Department") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = role == Role.EMPLOYEE, onClick = { role = Role.EMPLOYEE }, label = { Text("Employee") })
-                    FilterChip(selected = role == Role.ADMIN, onClick = { role = Role.ADMIN }, label = { Text("Administrator") })
+                    FilterChip(
+                        selected = role == Role.ADMIN, onClick = { role = Role.ADMIN }, enabled = canAddAdmin,
+                        label = { Text(if (canAddAdmin) "Administrator" else "Admin limit reached") },
+                    )
                 }
             }
         },

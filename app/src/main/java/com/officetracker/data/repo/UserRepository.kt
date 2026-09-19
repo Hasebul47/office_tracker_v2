@@ -4,6 +4,7 @@ import android.content.Context
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.officetracker.BuildConfig
 import com.officetracker.core.model.Role
@@ -18,63 +19,13 @@ import kotlinx.coroutines.tasks.await
 
 data class LegacyImportReport(val imported: Int, val skipped: List<String>)
 
-/** Administrator operations on employee accounts. */
-class UserRepository(
-    private val context: Context,
-    private val db: FirebaseFirestore,
-) {
-    fun observeUsers(): Flow<List<UserProfile>> = callbackFlow {
-        val reg = db.collection(Paths.USERS).addSnapshotListener { snap, error ->
-            if (error != null) {
-                close(error.toFriendly())
-                return@addSnapshotListener
-            }
-            val users = snap?.documents.orEmpty()
-                .filter { Mappers.isV2Profile(it) }
-                .map { Mappers.profile(it) }
-                .sortedWith(compareBy({ it.disabled }, { it.name.lowercase() }))
-            trySend(users)
-        }
-        awaitClose { reg.remove() }
-    }
+/**
+ * Creates Firebase logins through a secondary FirebaseApp, so the admin or super admin who is
+ * creating the account stays signed in.
+ */
+class LoginCreator(private val context: Context) {
 
-    fun observeUser(uid: String): Flow<UserProfile?> = callbackFlow {
-        val reg = Paths.user(db, uid).addSnapshotListener { doc, error ->
-            if (error != null) {
-                close(error.toFriendly())
-                return@addSnapshotListener
-            }
-            trySend(doc?.takeIf { it.exists() }?.let { Mappers.profile(it) })
-        }
-        awaitClose { reg.remove() }
-    }
-
-    /**
-     * Creates the Firebase login through a secondary FirebaseApp so the administrator stays
-     * signed in, then writes the profile document with the administrator's own credentials.
-     */
-    suspend fun createEmployee(
-        name: String,
-        phone: String,
-        password: String,
-        department: String,
-        role: Role,
-    ): Result<UserProfile> = runCatching {
-        require(name.isNotBlank()) { "Enter the employee's name." }
-        require(Phone.isValid(phone)) { "Enter a valid 11-digit mobile number." }
-        require(password.length >= 6) { "Password must be at least 6 characters." }
-        val cleanPhone = Phone.normalize(phone)
-        val uid = createLogin(cleanPhone, password)
-        val profile = UserProfile(
-            uid = uid, name = name.trim(), phone = cleanPhone, role = role,
-            department = department.trim().ifEmpty { "Field Operations" },
-            disabled = false, createdAt = System.currentTimeMillis(),
-        )
-        Paths.user(db, uid).set(Mappers.profileMap(profile)).await()
-        profile
-    }.mapError()
-
-    private suspend fun createLogin(phone: String, password: String): String {
+    suspend fun create(phone: String, password: String): String {
         val secondaryAuth = FirebaseAuth.getInstance(secondaryApp())
         val email = Phone.toAuthEmail(phone, BuildConfig.AUTH_EMAIL_DOMAIN)
         return try {
@@ -82,7 +33,7 @@ class UserRepository(
                 secondaryAuth.createUserWithEmailAndPassword(email, password).await().user?.uid
             } catch (e: FirebaseAuthUserCollisionException) {
                 // A login already exists (e.g. the profile was deleted earlier). Re-link it if the
-                // administrator supplied the same password; otherwise explain what to do.
+                // same password was supplied; otherwise explain what to do.
                 runCatching { secondaryAuth.signInWithEmailAndPassword(email, password).await().user?.uid }
                     .getOrNull()
                     ?: error(
@@ -100,11 +51,95 @@ class UserRepository(
         FirebaseApp.getApps(context).firstOrNull { it.name == SECONDARY_APP }
             ?: FirebaseApp.initializeApp(context, FirebaseApp.getInstance().options, SECONDARY_APP)
 
-    suspend fun updateEmployee(uid: String, name: String, department: String, role: Role): Result<Unit> = runCatching {
+    private companion object {
+        const val SECONDARY_APP = "account-admin"
+    }
+}
+
+/** People inside a company. Every add/remove also moves the company's user counters (see rules). */
+class UserRepository(
+    private val db: FirebaseFirestore,
+    private val logins: LoginCreator,
+) {
+    fun observeUsers(companyId: String): Flow<List<UserProfile>> = callbackFlow {
+        val reg = db.collection(Paths.USERS).whereEqualTo("companyId", companyId).addSnapshotListener { snap, error ->
+            if (error != null) {
+                close(error.toFriendly())
+                return@addSnapshotListener
+            }
+            val users = snap?.documents.orEmpty()
+                .filter { Mappers.isV2Profile(it) }
+                .map { Mappers.profile(it) }
+                .sortedWith(compareBy({ it.disabled }, { it.role != Role.ADMIN }, { it.name.lowercase() }))
+            trySend(users)
+        }
+        awaitClose { reg.remove() }
+    }
+
+    fun observeUser(uid: String): Flow<UserProfile?> = callbackFlow {
+        val reg = Paths.user(db, uid).addSnapshotListener { doc, error ->
+            if (error != null) {
+                close(error.toFriendly())
+                return@addSnapshotListener
+            }
+            trySend(doc?.takeIf { it.exists() }?.let { Mappers.profile(it) })
+        }
+        awaitClose { reg.remove() }
+    }
+
+    /**
+     * Adds a person to [companyId]. The login is created first, then the profile and the
+     * company counter are written in one batch so limits cannot be bypassed.
+     */
+    suspend fun createUser(
+        companyId: String,
+        name: String,
+        phone: String,
+        password: String,
+        department: String,
+        role: Role,
+        limits: Pair<Int, Int>? = null,
+        counts: Pair<Int, Int>? = null,
+    ): Result<UserProfile> = runCatching {
+        require(role != Role.SUPER_ADMIN) { "Not allowed." }
+        require(name.isNotBlank()) { "Enter the person's name." }
+        require(Phone.isValid(phone)) { "Enter a valid 11-digit mobile number." }
+        require(password.length >= 6) { "Password must be at least 6 characters." }
+        if (limits != null && counts != null) {
+            val (maxUsers, maxAdmins) = limits
+            val (users, admins) = counts
+            check(users < maxUsers) { "Your plan allows $maxUsers users. Upgrade the plan to add more." }
+            if (role == Role.ADMIN) check(admins < maxAdmins) { "Your plan allows $maxAdmins administrators." }
+        }
+        val cleanPhone = Phone.normalize(phone)
+        val uid = logins.create(cleanPhone, password)
+        val profile = UserProfile(
+            uid = uid, name = name.trim(), phone = cleanPhone, role = role,
+            department = department.trim().ifEmpty { if (role == Role.ADMIN) "Management" else "Field Operations" },
+            disabled = false, createdAt = System.currentTimeMillis(), companyId = companyId,
+        )
+        db.batch()
+            .set(Paths.user(db, uid), Mappers.profileMap(profile))
+            .update(Paths.company(db, companyId), counterUpdate(userDelta = 1, adminDelta = if (role == Role.ADMIN) 1 else 0))
+            .commit().await()
+        profile
+    }.mapError()
+
+    suspend fun updateUser(before: UserProfile, name: String, department: String, role: Role): Result<Unit> = runCatching {
         require(name.isNotBlank()) { "Name cannot be empty." }
-        Paths.user(db, uid).update(
-            mapOf("name" to name.trim(), "department" to department.trim(), "role" to role.name)
-        ).await()
+        require(role != Role.SUPER_ADMIN) { "Not allowed." }
+        val cid = before.companyId ?: error("User has no company.")
+        val adminDelta = when {
+            before.role != Role.ADMIN && role == Role.ADMIN -> 1
+            before.role == Role.ADMIN && role != Role.ADMIN -> -1
+            else -> 0
+        }
+        val batch = db.batch().update(
+            Paths.user(db, before.uid),
+            mapOf("name" to name.trim(), "department" to department.trim(), "role" to role.name),
+        )
+        if (adminDelta != 0) batch.update(Paths.company(db, cid), counterUpdate(userDelta = 0, adminDelta = adminDelta))
+        batch.commit().await()
         Unit
     }.mapError()
 
@@ -114,23 +149,24 @@ class UserRepository(
     }.mapError()
 
     /**
-     * Removes the profile and live position. Tracking history under users/{uid}/days stays in
-     * the cloud for records. The Firebase login itself can only be removed in the console.
+     * Removes the profile and live position and frees the seat. Tracking history under
+     * users/{uid}/days stays in the cloud. The Firebase login can only be removed in the console.
      */
-    suspend fun deleteEmployee(uid: String): Result<Unit> = runCatching {
+    suspend fun deleteUser(user: UserProfile): Result<Unit> = runCatching {
+        val cid = user.companyId ?: error("User has no company.")
         db.batch()
-            .delete(Paths.user(db, uid))
-            .delete(db.collection(Paths.LIVE).document(uid))
+            .delete(Paths.user(db, user.uid))
+            .delete(Paths.live(db, cid).document(user.uid))
+            .update(Paths.company(db, cid), counterUpdate(userDelta = -1, adminDelta = if (user.role == Role.ADMIN) -1 else 0))
             .commit().await()
         Unit
     }.mapError()
 
     /**
-     * One-time migration from v1, which stored employees at users/{phone} with plain-text
-     * passwords. Each is given a real Firebase login with the same password, and the old
-     * document (including its password) is deleted.
+     * Super admin: moves v1 accounts (users/{phone} with plain-text passwords) into [companyId]
+     * with real logins, deleting the old records. Counters are recounted afterwards.
      */
-    suspend fun importLegacyUsers(): Result<LegacyImportReport> = runCatching {
+    suspend fun importLegacyUsers(companyId: String): Result<LegacyImportReport> = runCatching {
         val all = db.collection(Paths.USERS).get().await().documents
         val legacy = all.filter { it.contains("password") }
         val existingPhones = all.filter { Mappers.isV2Profile(it) }.map { Phone.normalize(it.getString("phone").orEmpty()) }.toSet()
@@ -143,21 +179,22 @@ class UserRepository(
             when {
                 !Phone.isValid(phone) -> { skipped += "$name: invalid phone"; continue }
                 phone in existingPhones -> {
-                    // Already migrated (e.g. the administrator created during setup): just drop the old record.
                     runCatching { doc.reference.delete().await() }
-                    skipped += "$name ($phone): already has a v2 account - old record removed"
+                    skipped += "$name ($phone): already has an account - old record removed"
                     continue
                 }
                 password.length < 6 -> { skipped += "$name ($phone): password shorter than 6 characters - add manually"; continue }
             }
             try {
-                val uid = createLogin(phone, password)
+                val uid = logins.create(phone, password)
+                val legacyRole = Role.from(doc.getString("role"))
                 val profile = UserProfile(
                     uid = uid, name = name, phone = phone,
-                    role = Role.from(doc.getString("role")),
+                    role = if (legacyRole == Role.ADMIN) Role.ADMIN else Role.EMPLOYEE,
                     department = doc.getString("department").orEmpty().ifBlank { "Field Operations" },
                     disabled = doc.getBoolean("isDisabled") ?: false,
                     createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis(),
+                    companyId = companyId,
                 )
                 db.batch()
                     .set(Paths.user(db, uid), Mappers.profileMap(profile))
@@ -168,10 +205,26 @@ class UserRepository(
                 skipped += "$name ($phone): ${e.toFriendly().message}"
             }
         }
+        recount(companyId)
         LegacyImportReport(imported, skipped)
     }.mapError()
 
-    private companion object {
-        const val SECONDARY_APP = "employee-admin"
+    /** Super admin: recalculates a company's user counters from the actual profiles. */
+    suspend fun recount(companyId: String) {
+        val users = db.collection(Paths.USERS).whereEqualTo("companyId", companyId).get().await().documents
+            .filter { Mappers.isV2Profile(it) }
+        Paths.company(db, companyId).update(
+            mapOf(
+                "userCount" to users.size,
+                "adminCount" to users.count { it.getString("role") == Role.ADMIN.name },
+                "updatedAt" to System.currentTimeMillis(),
+            )
+        ).await()
+    }
+
+    private fun counterUpdate(userDelta: Int, adminDelta: Int): Map<String, Any> = buildMap {
+        if (userDelta != 0) put("userCount", FieldValue.increment(userDelta.toLong()))
+        if (adminDelta != 0) put("adminCount", FieldValue.increment(adminDelta.toLong()))
+        put("updatedAt", System.currentTimeMillis())
     }
 }

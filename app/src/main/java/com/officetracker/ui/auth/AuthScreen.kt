@@ -64,6 +64,13 @@ class AuthViewModel(private val c: AppContainer) : ViewModel() {
         private set
     var error by mutableStateOf<String?>(null)
         private set
+    /** Hides first-time setup once the platform has a super admin. */
+    var setupAvailable by mutableStateOf(false)
+        private set
+
+    init {
+        viewModelScope.launch { setupAvailable = c.auth.isPlatformSetUp() == false }
+    }
 
     fun signIn(phone: String, password: String) = launchAction { c.auth.signIn(phone, password) }
 
@@ -72,7 +79,7 @@ class AuthViewModel(private val c: AppContainer) : ViewModel() {
             error = "Passwords do not match."
             return
         }
-        launchAction { c.auth.setupOrganization(name, phone, password) }
+        launchAction { c.auth.setupPlatform(name, phone, password) }
     }
 
     fun clearError() { error = null }
@@ -120,7 +127,7 @@ fun AuthScreen(initialMessage: String?) {
             Spacer(Modifier.height(16.dp))
             Text("Office Tracker", style = MaterialTheme.typography.headlineMedium)
             Text(
-                if (setupMode) "Set up your organisation" else "Sign in with your work phone number",
+                if (setupMode) "Create the platform owner (super admin)" else "Sign in with your work phone number",
                 style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
@@ -171,17 +178,19 @@ fun AuthScreen(initialMessage: String?) {
                 }
                 Spacer(Modifier.height(4.dp))
                 LoadingButton(
-                    text = if (setupMode) "Create administrator" else "Sign in",
+                    text = if (setupMode) "Create super admin" else "Sign in",
                     loading = vm.busy,
                     icon = if (setupMode) Icons.Default.AdminPanelSettings else null,
                     onClick = { if (setupMode) vm.setup(name, phone, password, confirm) else vm.signIn(phone, password) },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                TextButton(
-                    onClick = { setupMode = !setupMode; vm.clearError() },
-                    modifier = Modifier.align(Alignment.CenterHorizontally),
-                ) {
-                    Text(if (setupMode) "Back to sign in" else "First time? Set up organisation")
+                if (vm.setupAvailable || setupMode) {
+                    TextButton(
+                        onClick = { setupMode = !setupMode; vm.clearError() },
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                    ) {
+                        Text(if (setupMode) "Back to sign in" else "First time? Set up the platform")
+                    }
                 }
                 if (!setupMode) {
                     Text(
@@ -191,7 +200,7 @@ fun AuthScreen(initialMessage: String?) {
                     )
                 } else {
                     Text(
-                        "This works only once, for the very first administrator. Everyone else is added from the Team tab.",
+                        "This works only once. The super admin then creates companies and their administrators; administrators add their employees.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                     )

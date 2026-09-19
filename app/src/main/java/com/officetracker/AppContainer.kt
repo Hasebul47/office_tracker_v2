@@ -8,7 +8,10 @@ import com.officetracker.data.local.AppDatabase
 import com.officetracker.data.local.SessionStore
 import com.officetracker.data.repo.AuthRepository
 import com.officetracker.data.repo.CloudDayRepository
+import com.officetracker.data.repo.CompanyState
+import com.officetracker.data.repo.LoginCreator
 import com.officetracker.data.repo.OrgRepository
+import com.officetracker.data.repo.PlatformRepository
 import com.officetracker.data.repo.Session
 import com.officetracker.data.repo.UserRepository
 import com.officetracker.data.repo.WorkdayRepository
@@ -25,6 +28,10 @@ import com.officetracker.update.UpdateManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 
 /** Manual dependency injection: one place that wires the app together. */
@@ -45,7 +52,9 @@ class AppContainer(private val context: Context) {
 
     val auth: AuthRepository by lazy { AuthRepository(firebaseAuth, firestore, store, appScope) }
     val org: OrgRepository by lazy { OrgRepository(firestore) }
-    val users: UserRepository by lazy { UserRepository(context, firestore) }
+    private val logins by lazy { LoginCreator(context) }
+    val users: UserRepository by lazy { UserRepository(firestore, logins) }
+    val platform: PlatformRepository by lazy { PlatformRepository(firestore, logins) }
     val cloudDays: CloudDayRepository by lazy { CloudDayRepository(firestore) }
     val workdays: WorkdayRepository by lazy { WorkdayRepository(db, sync) }
     val uploader: CloudUploader by lazy { CloudUploader(db, firestore) }
@@ -67,20 +76,43 @@ class AppContainer(private val context: Context) {
                 when (session) {
                     is Session.SignedIn -> {
                         wasSignedIn = true
-                        org.startListening()
-                        sync.schedulePeriodic()
-                        sync.requestSync(expedited = true)
-                        tracking.ensureServiceState()
+                        platform.startListening()
+                        val cid = session.profile.companyId
+                        if (session.profile.isSuperAdmin || cid == null) {
+                            org.stopListening()
+                        } else {
+                            org.startListening(cid)
+                            sync.schedulePeriodic()
+                            sync.requestSync(expedited = true)
+                            tracking.ensureServiceState()
+                        }
                     }
                     is Session.SignedOut -> {
                         if (wasSignedIn) TrackingService.stop(context)
                         wasSignedIn = false
                         org.stopListening()
+                        platform.stopListening()
                         sync.cancelAll()
                     }
                     Session.Loading -> Unit
                 }
             }
+        }
+        // Subscription enforcement: re-evaluated on every company change and once a minute, so a
+        // suspension or an expiry takes effect on the phone without a restart.
+        appScope.launch {
+            combine(org.company, ticker(60_000)) { state, now -> (state as? CompanyState.Loaded)?.company?.access(now) }
+                .distinctUntilChanged()
+                .collect { access ->
+                    if (access != null && !access.usable) tracking.lockedByPlan()
+                }
+        }
+    }
+
+    private fun ticker(periodMs: Long) = flow {
+        while (true) {
+            emit(System.currentTimeMillis())
+            delay(periodMs)
         }
     }
 }

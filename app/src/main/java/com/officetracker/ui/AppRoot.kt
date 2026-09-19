@@ -19,9 +19,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.officetracker.BuildConfig
 import com.officetracker.OfficeTrackerApp
+import com.officetracker.data.repo.CompanyState
 import com.officetracker.data.repo.Session
 import com.officetracker.ui.auth.AuthScreen
+import com.officetracker.ui.superadmin.SuperShell
+import com.officetracker.ui.tenant.BlockedScreen
+import com.officetracker.ui.tenant.BlockedReason
 import com.officetracker.ui.update.UpdatePrompt
 
 @Composable
@@ -34,12 +39,39 @@ fun AppRoot() {
         }
         val session by container.auth.session.collectAsStateWithLifecycle()
         when (val s = session) {
-            Session.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            Session.Loading -> Loading()
             is Session.SignedOut -> AuthScreen(initialMessage = s.message)
-            is Session.SignedIn -> MainShell(profile = s.profile)
+            is Session.SignedIn -> {
+                val profile = s.profile
+                val platform by container.platform.platform.collectAsStateWithLifecycle()
+                when {
+                    profile.isSuperAdmin -> SuperShell(profile)
+                    platform.maintenanceMode -> BlockedScreen(BlockedReason.Maintenance(platform.maintenanceMessage), profile, platform)
+                    BuildConfig.VERSION_CODE < platform.minVersionCode -> BlockedScreen(BlockedReason.UpdateRequired, profile, platform)
+                    profile.companyId == null -> BlockedScreen(BlockedReason.NoCompany, profile, platform)
+                    else -> {
+                        val companyState by container.org.company.collectAsStateWithLifecycle()
+                        val now = com.officetracker.ui.components.rememberNow(60_000)
+                        when (val cs = companyState) {
+                            CompanyState.Loading -> Loading()
+                            CompanyState.Missing -> BlockedScreen(BlockedReason.NoCompany, profile, platform)
+                            is CompanyState.Loaded -> {
+                                val access = cs.company.access(now)
+                                if (!access.usable) BlockedScreen(BlockedReason.Locked(cs.company, access), profile, platform)
+                                else MainShell(profile = profile, company = cs.company, platform = platform)
+                            }
+                        }
+                    }
+                }
+            }
         }
         UpdatePrompt()
     }
+}
+
+@Composable
+private fun Loading() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
 }
 
 @Composable

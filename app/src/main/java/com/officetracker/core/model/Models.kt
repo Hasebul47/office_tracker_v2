@@ -1,10 +1,14 @@
 package com.officetracker.core.model
 
-enum class Role {
-    ADMIN, EMPLOYEE;
+enum class Role(val label: String) {
+    /** Platform owner: manages companies, plans and subscriptions. Belongs to no company. */
+    SUPER_ADMIN("Super admin"),
+    /** Company administrator: manages employees, places and settings of one company. */
+    ADMIN("Administrator"),
+    EMPLOYEE("Employee");
 
     companion object {
-        fun from(value: String?): Role = if (value.equals("ADMIN", ignoreCase = true)) ADMIN else EMPLOYEE
+        fun from(value: String?): Role = entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: EMPLOYEE
     }
 }
 
@@ -16,8 +20,11 @@ data class UserProfile(
     val department: String,
     val disabled: Boolean,
     val createdAt: Long,
+    /** Tenant this person belongs to; null only for the super admin. */
+    val companyId: String? = null,
 ) {
     val isAdmin: Boolean get() = role == Role.ADMIN
+    val isSuperAdmin: Boolean get() = role == Role.SUPER_ADMIN
     val initials: String
         get() = name.split(' ').filter { it.isNotBlank() }.take(2)
             .joinToString("") { it.first().uppercase() }.ifEmpty { "?" }
@@ -58,7 +65,7 @@ data class Place(
     val address: String? = null,
 )
 
-/** Organisation-wide settings, stored in Firestore at config/app. */
+/** A company's own tracking settings (edited by its administrator). */
 data class AppConfig(
     val ratePerKm: Double = 6.0,
     val stayRadiusMeters: Double = 80.0,

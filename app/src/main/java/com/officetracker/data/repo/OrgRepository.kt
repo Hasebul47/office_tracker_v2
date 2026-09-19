@@ -1,10 +1,15 @@
 package com.officetracker.data.repo
 
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.officetracker.core.model.AppConfig
+import com.officetracker.core.model.Company
+import com.officetracker.core.model.Features
 import com.officetracker.core.model.LiveState
+import com.officetracker.core.model.Payment
 import com.officetracker.core.model.Place
 import com.officetracker.data.remote.Mappers
 import com.officetracker.data.remote.Paths
@@ -16,12 +21,21 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
+sealed interface CompanyState {
+    data object Loading : CompanyState
+    data object Missing : CompanyState
+    data class Loaded(val company: Company) : CompanyState
+}
+
 /**
- * Organisation-wide shared data: known places, settings and live positions.
- * Places and settings are kept hot while someone is signed in, because the tracking
- * service needs them instantly (and offline, thanks to Firestore's local cache).
+ * The signed-in person's company (tenant). Kept hot while signed in: the company document
+ * carries subscription, limits, feature switches and settings, so any change the super admin
+ * makes reaches every phone within seconds.
  */
 class OrgRepository(private val db: FirebaseFirestore) {
+
+    private val _company = MutableStateFlow<CompanyState>(CompanyState.Loading)
+    val company: StateFlow<CompanyState> = _company.asStateFlow()
 
     private val _places = MutableStateFlow<List<Place>>(emptyList())
     val places: StateFlow<List<Place>> = _places.asStateFlow()
@@ -29,39 +43,63 @@ class OrgRepository(private val db: FirebaseFirestore) {
     private val _config = MutableStateFlow(AppConfig())
     val config: StateFlow<AppConfig> = _config.asStateFlow()
 
-    private var placesReg: ListenerRegistration? = null
-    private var configReg: ListenerRegistration? = null
+    private val _features = MutableStateFlow(Features.ALL)
+    val features: StateFlow<Features> = _features.asStateFlow()
 
-    fun startListening() {
-        if (placesReg == null) {
-            placesReg = db.collection(Paths.PLACES).addSnapshotListener { snap, _ ->
-                if (snap != null) _places.value = snap.documents.mapNotNull { Mappers.place(it) }.sortedBy { it.name.lowercase() }
+    @Volatile var companyId: String? = null
+        private set
+
+    private var companyReg: ListenerRegistration? = null
+    private var placesReg: ListenerRegistration? = null
+
+    val currentCompany: Company? get() = (company.value as? CompanyState.Loaded)?.company
+
+    fun startListening(cid: String) {
+        if (companyId == cid && companyReg != null) return
+        stopListening()
+        companyId = cid
+        _company.value = CompanyState.Loading
+        companyReg = Paths.company(db, cid).addSnapshotListener { doc, error ->
+            when {
+                error != null && error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED -> _company.value = CompanyState.Missing
+                error != null -> Unit // keep last known state while offline
+                doc == null -> Unit
+                !doc.exists() && doc.metadata.isFromCache -> Unit
+                !doc.exists() -> _company.value = CompanyState.Missing
+                else -> Mappers.company(doc)?.let { c ->
+                    _company.value = CompanyState.Loaded(c)
+                    _config.value = c.settings
+                    _features.value = c.features
+                }
             }
         }
-        if (configReg == null) {
-            configReg = db.collection(Paths.CONFIG).document(Paths.CONFIG_APP).addSnapshotListener { doc, _ ->
-                if (doc != null) _config.value = Mappers.config(doc)
-            }
+        placesReg = Paths.places(db, cid).addSnapshotListener { snap, _ ->
+            if (snap != null) _places.value = snap.documents.mapNotNull { Mappers.place(it) }.sortedBy { it.name.lowercase() }
         }
     }
 
     fun stopListening() {
+        companyReg?.remove(); companyReg = null
         placesReg?.remove(); placesReg = null
-        configReg?.remove(); configReg = null
+        companyId = null
+        _company.value = CompanyState.Loading
         _places.value = emptyList()
         _config.value = AppConfig()
+        _features.value = Features.ALL
     }
+
+    private fun cid(): String = companyId ?: error("No company selected.")
 
     suspend fun savePlace(place: Place): Result<Unit> = runCatching {
         require(place.name.isNotBlank()) { "Enter a name for the place." }
-        val col = db.collection(Paths.PLACES)
+        val col = Paths.places(db, cid())
         val ref = if (place.id.isBlank()) col.document() else col.document(place.id)
         ref.set(Mappers.placeMap(place)).await()
         Unit
     }.mapError()
 
     suspend fun deletePlace(id: String): Result<Unit> = runCatching {
-        db.collection(Paths.PLACES).document(id).delete().await()
+        Paths.places(db, cid()).document(id).delete().await()
         Unit
     }.mapError()
 
@@ -69,7 +107,9 @@ class OrgRepository(private val db: FirebaseFirestore) {
         require(config.ratePerKm in 0.0..1000.0) { "Rate must be between 0 and 1000." }
         require(config.stayRadiusMeters in 30.0..500.0) { "Stay radius must be 30-500 m." }
         require(config.minStayMinutes in 1..60) { "Minimum stay must be 1-60 minutes." }
-        db.collection(Paths.CONFIG).document(Paths.CONFIG_APP).set(Mappers.configMap(config), SetOptions.merge()).await()
+        Paths.company(db, cid()).update(
+            mapOf("settings" to Mappers.configMap(config), "updatedAt" to System.currentTimeMillis())
+        ).await()
         Unit
     }.mapError()
 
@@ -77,11 +117,23 @@ class OrgRepository(private val db: FirebaseFirestore) {
 
     /** Fire-and-forget: Firestore queues the write while offline. */
     fun publishLive(state: LiveState) {
-        db.collection(Paths.LIVE).document(state.uid).set(Mappers.liveMap(state), SetOptions.merge())
+        val cid = companyId ?: return
+        Paths.live(db, cid).document(state.uid).set(Mappers.liveMap(state), SetOptions.merge())
     }
 
-    fun observeLive(uid: String): Flow<LiveState?> = callbackFlow {
-        val reg = db.collection(Paths.LIVE).document(uid).addSnapshotListener { doc, error ->
+    fun observeLive(cid: String = cid()): Flow<List<LiveState>> = callbackFlow {
+        val reg = Paths.live(db, cid).addSnapshotListener { snap, error ->
+            if (error != null) {
+                close(error.toFriendly())
+                return@addSnapshotListener
+            }
+            trySend(snap?.documents.orEmpty().map { Mappers.live(it) })
+        }
+        awaitClose { reg.remove() }
+    }
+
+    fun observeLive(cid: String, uid: String): Flow<LiveState?> = callbackFlow {
+        val reg = Paths.live(db, cid).document(uid).addSnapshotListener { doc, error ->
             if (error != null) {
                 close(error.toFriendly())
                 return@addSnapshotListener
@@ -91,14 +143,15 @@ class OrgRepository(private val db: FirebaseFirestore) {
         awaitClose { reg.remove() }
     }
 
-    fun observeLive(): Flow<List<LiveState>> = callbackFlow {
-        val reg = db.collection(Paths.LIVE).addSnapshotListener { snap, error ->
-            if (error != null) {
-                close(error.toFriendly())
-                return@addSnapshotListener
+    fun observePayments(cid: String = cid()): Flow<List<Payment>> = callbackFlow {
+        val reg = Paths.payments(db, cid).orderBy("createdAt", Query.Direction.DESCENDING).limit(50)
+            .addSnapshotListener { snap, error ->
+                if (error != null) {
+                    close(error.toFriendly())
+                    return@addSnapshotListener
+                }
+                trySend(snap?.documents.orEmpty().map { Mappers.payment(it) })
             }
-            trySend(snap?.documents.orEmpty().map { Mappers.live(it) })
-        }
         awaitClose { reg.remove() }
     }
 }

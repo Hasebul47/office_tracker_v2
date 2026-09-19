@@ -32,7 +32,7 @@ class PlaceNamer(
     private val dao: TrackerDao,
 ) {
     fun matchKnownPlace(lat: Double, lng: Double): Place? =
-        org.places.value
+        if (!org.features.value.places) null else org.places.value
             .map { it to Geo.distanceMeters(lat, lng, it.latitude, it.longitude) }
             .filter { (place, d) -> d <= place.radiusMeters }
             .minByOrNull { it.second }

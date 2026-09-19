@@ -2,6 +2,7 @@ package com.officetracker.tracking
 
 import android.content.Context
 import com.officetracker.BuildConfig
+import com.officetracker.core.model.AccessState
 import com.officetracker.core.model.LiveState
 import com.officetracker.core.model.WorkStatus
 import com.officetracker.core.model.Workday
@@ -21,8 +22,31 @@ class TrackingController(
 ) {
     private fun uid(): String = auth.currentUid ?: error("Not signed in.")
 
+    /** Blocks tracking when the company's subscription does not allow it. */
+    private fun checkPlan() {
+        val company = org.currentCompany ?: return // unknown offline: allow, the cloud re-checks on upload
+        val access = company.access(System.currentTimeMillis())
+        check(access.usable) {
+            when (access) {
+                AccessState.SUSPENDED -> "Your company's account is suspended. Contact your administrator."
+                else -> "Your company's subscription has expired. Contact your administrator to renew."
+            }
+        }
+    }
+
+    /** Called when the subscription stops being usable: pause an active day and stop GPS. */
+    suspend fun lockedByPlan() {
+        val uid = auth.currentUid ?: return
+        val open = workdays.openWorkday(uid) ?: return
+        if (open.status == WorkStatus.ACTIVE) {
+            workdays.pause(uid, System.currentTimeMillis())
+        }
+        TrackingService.stop(context)
+    }
+
     suspend fun startDay(): Result<Unit> = runCatching {
         val uid = uid()
+        checkPlan()
         check(locationClient.hasForegroundPermission()) { "Location permission is required to start your day." }
         check(locationClient.isLocationEnabled()) { "Turn on Location (GPS) to start your day." }
         val open = workdays.openWorkday(uid)
@@ -45,6 +69,7 @@ class TrackingController(
 
     suspend fun resume(): Result<Unit> = runCatching {
         val uid = uid()
+        checkPlan()
         check(locationClient.hasForegroundPermission()) { "Location permission is required." }
         workdays.resume(uid, System.currentTimeMillis())
         TrackingService.start(context)
@@ -63,7 +88,8 @@ class TrackingController(
     suspend fun ensureServiceState() {
         val uid = auth.currentUid ?: return
         val open = workdays.openWorkday(uid)
-        if (open?.status == WorkStatus.ACTIVE && locationClient.hasForegroundPermission()) {
+        val planOk = org.currentCompany?.access(System.currentTimeMillis())?.usable ?: true
+        if (open?.status == WorkStatus.ACTIVE && planOk && locationClient.hasForegroundPermission()) {
             TrackingService.start(context)
         }
     }

@@ -12,7 +12,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.officetracker.BuildConfig
+import com.officetracker.core.model.PlatformConfig
 import com.officetracker.core.model.Role
+import com.officetracker.core.model.StarterPlans
 import com.officetracker.core.model.UserProfile
 import com.officetracker.core.util.Phone
 import com.officetracker.data.local.SessionStore
@@ -125,11 +127,14 @@ class AuthRepository(
         Unit
     }.mapError()
 
-    /** First run only: creates the organisation's administrator. Rules reject it once done. */
-    suspend fun setupOrganization(name: String, phone: String, password: String): Result<Unit> = runCatching {
+    /**
+     * First run only: creates the platform's super admin, default platform settings and starter
+     * plans. Security rules reject it once platform/setup exists.
+     */
+    suspend fun setupPlatform(name: String, phone: String, password: String): Result<Unit> = runCatching {
         require(name.isNotBlank()) { "Enter your name." }
         require(Phone.isValid(phone)) { "Enter a valid 11-digit mobile number." }
-        require(password.length >= 8) { "Use at least 8 characters for the admin password." }
+        require(password.length >= 8) { "Use at least 8 characters for the super admin password." }
         val email = Phone.toAuthEmail(phone, BuildConfig.AUTH_EMAIL_DOMAIN)
         settingUp = true
         val user = try {
@@ -138,24 +143,26 @@ class AuthRepository(
             settingUp = false
             throw e
         }
+        val now = System.currentTimeMillis()
         val profile = UserProfile(
-            uid = user.uid, name = name.trim(), phone = Phone.normalize(phone), role = Role.ADMIN,
-            department = "Management", disabled = false, createdAt = System.currentTimeMillis(),
+            uid = user.uid, name = name.trim(), phone = Phone.normalize(phone), role = Role.SUPER_ADMIN,
+            department = "Platform", disabled = false, createdAt = now, companyId = null,
         )
         try {
-            db.batch()
+            val batch = db.batch()
                 .set(Paths.user(db, user.uid), Mappers.profileMap(profile))
-                .set(
-                    db.collection(Paths.CONFIG).document(Paths.CONFIG_SETUP),
-                    mapOf("adminUid" to user.uid, "createdAt" to System.currentTimeMillis()),
-                )
-                .commit().await()
+                .set(Paths.platformSetup(db), mapOf("superAdminUid" to user.uid, "createdAt" to now))
+                .set(Paths.platformConfig(db), Mappers.platformMap(PlatformConfig()))
+            StarterPlans.all().forEach { plan ->
+                batch.set(db.collection(Paths.PLANS).document(plan.id), Mappers.planMap(plan))
+            }
+            batch.commit().await()
         } catch (e: FirebaseFirestoreException) {
             settingUp = false
             runCatching { user.delete().await() }
             auth.signOut()
             if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
-                error("This organisation is already set up. Sign in, or ask your administrator for an account.")
+                error("The platform is already set up. Sign in, or ask your administrator for an account.")
             }
             throw e
         } finally {
@@ -163,6 +170,10 @@ class AuthRepository(
         }
         Unit
     }.mapError()
+
+    /** null when it cannot be determined (offline). */
+    suspend fun isPlatformSetUp(): Boolean? =
+        runCatching { Paths.platformSetup(db).get().await().exists() }.getOrNull()
 
     suspend fun changePassword(current: String, newPassword: String): Result<Unit> = runCatching {
         require(newPassword.length >= 6) { "New password must be at least 6 characters." }

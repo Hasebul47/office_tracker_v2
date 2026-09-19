@@ -3,6 +3,12 @@ package com.officetracker.data.remote
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.officetracker.core.model.AppConfig
+import com.officetracker.core.model.Billing
+import com.officetracker.core.model.Company
+import com.officetracker.core.model.Features
+import com.officetracker.core.model.Payment
+import com.officetracker.core.model.Plan
+import com.officetracker.core.model.PlatformConfig
 import com.officetracker.core.model.LiveState
 import com.officetracker.core.model.Place
 import com.officetracker.core.model.PlaceCategory
@@ -14,13 +20,12 @@ import com.officetracker.core.model.WorkStatus
 import com.officetracker.core.model.Workday
 
 /** Firestore layout (see firestore.rules):
- *  users/{uid}                              profile + role
- *  users/{uid}/days/{yyyy-MM-dd}            workday summary
- *  users/{uid}/days/{date}/stays/{stayId}   detected visits
- *  users/{uid}/days/{date}/tracks/{chunk}   GPS points, up to 400 per document
- *  live/{uid}                               latest position & device status
- *  places/{id}                              known offices / sites
- *  config/app, config/setup                 settings, one-time bootstrap marker
+ *  platform/config, platform/setup          platform switches, one-time bootstrap marker
+ *  plans/{planId}                           sellable packages
+ *  companies/{cid}                          tenant: subscription, limits, features, settings
+ *  companies/{cid}/places|live|payments     per-company data
+ *  users/{uid}                              profile + role + companyId
+ *  users/{uid}/days/{yyyy-MM-dd}/...        workdays, stays, GPS track chunks
  */
 object Paths {
     const val USERS = "users"
@@ -29,12 +34,21 @@ object Paths {
     const val TRACKS = "tracks"
     const val LIVE = "live"
     const val PLACES = "places"
-    const val CONFIG = "config"
-    const val CONFIG_APP = "app"
-    const val CONFIG_SETUP = "setup"
+    const val PAYMENTS = "payments"
+    const val COMPANIES = "companies"
+    const val PLANS = "plans"
+    const val PLATFORM = "platform"
+    const val PLATFORM_CONFIG = "config"
+    const val PLATFORM_SETUP = "setup"
 
     fun user(db: FirebaseFirestore, uid: String) = db.collection(USERS).document(uid)
     fun day(db: FirebaseFirestore, uid: String, date: String) = user(db, uid).collection(DAYS).document(date)
+    fun company(db: FirebaseFirestore, cid: String) = db.collection(COMPANIES).document(cid)
+    fun places(db: FirebaseFirestore, cid: String) = company(db, cid).collection(PLACES)
+    fun live(db: FirebaseFirestore, cid: String) = company(db, cid).collection(LIVE)
+    fun payments(db: FirebaseFirestore, cid: String) = company(db, cid).collection(PAYMENTS)
+    fun platformConfig(db: FirebaseFirestore) = db.collection(PLATFORM).document(PLATFORM_CONFIG)
+    fun platformSetup(db: FirebaseFirestore) = db.collection(PLATFORM).document(PLATFORM_SETUP)
 }
 
 private fun DocumentSnapshot.double(field: String): Double? = (get(field) as? Number)?.toDouble()
@@ -53,6 +67,7 @@ object Mappers {
         department = doc.getString("department").orEmpty(),
         disabled = doc.getBoolean("disabled") ?: false,
         createdAt = doc.long("createdAt") ?: 0L,
+        companyId = doc.getString("companyId"),
     )
 
     fun profileMap(p: UserProfile): Map<String, Any?> = mapOf(
@@ -62,6 +77,7 @@ object Mappers {
         "department" to p.department,
         "disabled" to p.disabled,
         "createdAt" to p.createdAt,
+        "companyId" to p.companyId,
     )
 
     fun place(doc: DocumentSnapshot): Place? {
@@ -87,14 +103,15 @@ object Mappers {
         "address" to p.address,
     )
 
-    fun config(doc: DocumentSnapshot?): AppConfig {
+    fun config(m: Map<*, *>?): AppConfig {
         val d = AppConfig()
-        if (doc == null || !doc.exists()) return d
+        if (m == null) return d
+        fun num(k: String) = (m[k] as? Number)
         return AppConfig(
-            ratePerKm = doc.double("ratePerKm") ?: d.ratePerKm,
-            stayRadiusMeters = doc.double("stayRadiusMeters") ?: d.stayRadiusMeters,
-            minStayMinutes = doc.int("minStayMinutes") ?: d.minStayMinutes,
-            maxAccuracyMeters = doc.double("maxAccuracyMeters") ?: d.maxAccuracyMeters,
+            ratePerKm = num("ratePerKm")?.toDouble() ?: d.ratePerKm,
+            stayRadiusMeters = num("stayRadiusMeters")?.toDouble() ?: d.stayRadiusMeters,
+            minStayMinutes = num("minStayMinutes")?.toInt() ?: d.minStayMinutes,
+            maxAccuracyMeters = num("maxAccuracyMeters")?.toDouble() ?: d.maxAccuracyMeters,
         )
     }
 
@@ -210,6 +227,145 @@ object Mappers {
         "category" to s.category.name,
         "manual" to s.manualLabel,
         "updatedAt" to updatedAt,
+    )
+
+    // ---------- SaaS ----------
+
+    fun company(doc: DocumentSnapshot): Company? {
+        if (!doc.exists()) return null
+        return Company(
+            id = doc.id,
+            name = doc.getString("name").orEmpty(),
+            contactName = doc.getString("contactName").orEmpty(),
+            contactPhone = doc.getString("contactPhone").orEmpty(),
+            email = doc.getString("email").orEmpty(),
+            address = doc.getString("address").orEmpty(),
+            notes = doc.getString("notes").orEmpty(),
+            planId = doc.getString("planId"),
+            planName = doc.getString("planName").orEmpty(),
+            billing = Billing.from(doc.getString("billing")),
+            price = doc.double("price") ?: 0.0,
+            suspended = doc.getBoolean("suspended") ?: false,
+            suspendReason = doc.getString("suspendReason"),
+            startedAt = doc.long("startedAt") ?: 0L,
+            expiresAt = doc.long("expiresAt") ?: 0L,
+            accessUntil = doc.long("accessUntil") ?: 0L,
+            maxUsers = doc.int("maxUsers") ?: 0,
+            maxAdmins = doc.int("maxAdmins") ?: 1,
+            userCount = doc.int("userCount") ?: 0,
+            adminCount = doc.int("adminCount") ?: 0,
+            features = Features.fromMap(doc.get("features") as? Map<*, *>),
+            settings = config(doc.get("settings") as? Map<*, *>),
+            createdAt = doc.long("createdAt") ?: 0L,
+        )
+    }
+
+    /** Subscription + limits fields (everything the super admin controls). */
+    fun subscriptionMap(c: Company): Map<String, Any?> = mapOf(
+        "planId" to c.planId,
+        "planName" to c.planName,
+        "billing" to c.billing.name,
+        "price" to c.price,
+        "suspended" to c.suspended,
+        "suspendReason" to c.suspendReason,
+        "startedAt" to c.startedAt,
+        "expiresAt" to c.expiresAt,
+        "accessUntil" to c.accessUntil,
+        "maxUsers" to c.maxUsers,
+        "maxAdmins" to c.maxAdmins,
+        "features" to c.features.toMap(),
+        "updatedAt" to System.currentTimeMillis(),
+    )
+
+    fun companyProfileMap(c: Company): Map<String, Any?> = mapOf(
+        "name" to c.name,
+        "contactName" to c.contactName,
+        "contactPhone" to c.contactPhone,
+        "email" to c.email,
+        "address" to c.address,
+        "notes" to c.notes,
+        "updatedAt" to System.currentTimeMillis(),
+    )
+
+    fun newCompanyMap(c: Company): Map<String, Any?> =
+        companyProfileMap(c) + subscriptionMap(c) + mapOf(
+            "userCount" to c.userCount,
+            "adminCount" to c.adminCount,
+            "settings" to configMap(c.settings),
+            "createdAt" to c.createdAt,
+        )
+
+    fun plan(doc: DocumentSnapshot): Plan = Plan(
+        id = doc.id,
+        name = doc.getString("name").orEmpty(),
+        description = doc.getString("description").orEmpty(),
+        billing = Billing.from(doc.getString("billing")),
+        durationDays = doc.int("durationDays") ?: 30,
+        price = doc.double("price") ?: 0.0,
+        maxUsers = doc.int("maxUsers") ?: 10,
+        maxAdmins = doc.int("maxAdmins") ?: 1,
+        features = Features.fromMap(doc.get("features") as? Map<*, *>),
+        active = doc.getBoolean("active") ?: true,
+        sortOrder = doc.int("sortOrder") ?: 0,
+    )
+
+    fun planMap(p: Plan): Map<String, Any?> = mapOf(
+        "name" to p.name,
+        "description" to p.description,
+        "billing" to p.billing.name,
+        "durationDays" to p.durationDays,
+        "price" to p.price,
+        "maxUsers" to p.maxUsers,
+        "maxAdmins" to p.maxAdmins,
+        "features" to p.features.toMap(),
+        "active" to p.active,
+        "sortOrder" to p.sortOrder,
+    )
+
+    fun platform(doc: DocumentSnapshot?): PlatformConfig {
+        val d = PlatformConfig()
+        if (doc == null || !doc.exists()) return d
+        return PlatformConfig(
+            appName = doc.getString("appName") ?: d.appName,
+            graceDays = doc.int("graceDays") ?: d.graceDays,
+            supportPhone = doc.getString("supportPhone") ?: d.supportPhone,
+            supportEmail = doc.getString("supportEmail") ?: d.supportEmail,
+            announcement = doc.getString("announcement") ?: d.announcement,
+            maintenanceMode = doc.getBoolean("maintenanceMode") ?: d.maintenanceMode,
+            maintenanceMessage = doc.getString("maintenanceMessage") ?: d.maintenanceMessage,
+            minVersionCode = doc.int("minVersionCode") ?: d.minVersionCode,
+        )
+    }
+
+    fun platformMap(p: PlatformConfig): Map<String, Any?> = mapOf(
+        "appName" to p.appName,
+        "graceDays" to p.graceDays,
+        "supportPhone" to p.supportPhone,
+        "supportEmail" to p.supportEmail,
+        "announcement" to p.announcement,
+        "maintenanceMode" to p.maintenanceMode,
+        "maintenanceMessage" to p.maintenanceMessage,
+        "minVersionCode" to p.minVersionCode,
+        "updatedAt" to System.currentTimeMillis(),
+    )
+
+    fun payment(doc: DocumentSnapshot): Payment = Payment(
+        id = doc.id,
+        amount = doc.double("amount") ?: 0.0,
+        method = doc.getString("method").orEmpty(),
+        reference = doc.getString("reference").orEmpty(),
+        note = doc.getString("note").orEmpty(),
+        extendedDays = doc.int("extendedDays") ?: 0,
+        createdAt = doc.long("createdAt") ?: 0L,
+    )
+
+    fun paymentMap(p: Payment): Map<String, Any?> = mapOf(
+        "amount" to p.amount,
+        "method" to p.method,
+        "reference" to p.reference,
+        "note" to p.note,
+        "extendedDays" to p.extendedDays,
+        "createdAt" to p.createdAt,
     )
 
     /** Track chunks store parallel arrays - far cheaper than one document per GPS fix. */

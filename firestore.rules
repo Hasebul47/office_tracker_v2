@@ -1,70 +1,138 @@
 rules_version = '2';
 
-// Office Tracker v2 security rules.
+// Office Tracker - multi-company (SaaS) security rules.
 // Paste into Firebase Console > Firestore Database > Rules and click Publish.
+//
+// Roles:  SUPER_ADMIN (platform owner, no company)
+//         ADMIN       (manages one company)
+//         EMPLOYEE    (tracks own workdays)
+// A company can only write while it is not suspended and its paid/trial period
+// (plus grace) has not run out - enforced here, not only in the app.
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ---------- helpers ----------
     function signedIn() { return request.auth != null; }
-    function userDoc(uid) { return /databases/$(database)/documents/users/$(uid); }
-    function me() { return get(userDoc(request.auth.uid)).data; }
-    function isActive() {
-      return signedIn() && exists(userDoc(request.auth.uid)) && me().get('disabled', false) != true;
-    }
-    function isAdmin() { return isActive() && me().role == 'ADMIN'; }
-    function isSelf(uid) { return signedIn() && request.auth.uid == uid; }
-    function setupPath() { return /databases/$(database)/documents/config/setup; }
+    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function companyPath(cid) { return /databases/$(database)/documents/companies/$(cid); }
+    function setupPath() { return /databases/$(database)/documents/platform/setup; }
 
-    // One-time organisation setup: the very first account becomes the administrator.
-    match /config/setup {
-      allow read: if signedIn();
+    function me() { return get(userPath(request.auth.uid)).data; }
+    function isActiveUser() {
+      return signedIn() && exists(userPath(request.auth.uid)) && me().get('disabled', false) != true;
+    }
+    function isSuper() { return isActiveUser() && me().role == 'SUPER_ADMIN'; }
+    function isMemberOf(cid) { return isActiveUser() && me().get('companyId', '') == cid; }
+    function isAdminOf(cid) { return isMemberOf(cid) && me().role == 'ADMIN'; }
+    function isSelf(uid) { return signedIn() && request.auth.uid == uid; }
+
+    function company(cid) { return get(companyPath(cid)).data; }
+    function companyUsable(cid) {
+      return company(cid).get('suspended', false) != true
+        && company(cid).accessUntil > request.time.toMillis();
+    }
+    function canWorkIn(cid) { return isMemberOf(cid) && companyUsable(cid); }
+
+    // A counter may stay the same, drop by one, or grow by one while staying within its limit.
+    function counterOk(field, limit) {
+      let before = resource.data.get(field, 0);
+      let after = request.resource.data.get(field, 0);
+      return after == before || (after == before - 1 && after >= 0)
+        || (after == before + 1 && after <= resource.data.get(limit, 0));
+    }
+
+    // First-run bootstrap: the very first account becomes the super admin.
+    function bootstrapping() {
+      return signedIn() && !exists(setupPath()) && existsAfter(setupPath())
+        && getAfter(setupPath()).data.superAdminUid == request.auth.uid;
+    }
+
+    // ---------- platform ----------
+    match /platform/setup {
+      // Public so the login screen can hide "first-time setup" once the platform exists.
+      allow get: if true;
       allow create: if signedIn()
-        && request.resource.data.adminUid == request.auth.uid
-        && getAfter(userDoc(request.auth.uid)).data.role == 'ADMIN';
+        && request.resource.data.superAdminUid == request.auth.uid
+        && getAfter(userPath(request.auth.uid)).data.role == 'SUPER_ADMIN';
       allow update, delete: if false;
     }
-
-    // App-wide settings (allowance rate, stay detection thresholds).
-    match /config/app {
-      allow read: if isActive();
-      allow write: if isAdmin();
+    match /platform/config {
+      allow read: if signedIn();
+      allow write: if isSuper() || bootstrapping();
+    }
+    match /plans/{planId} {
+      allow read: if signedIn();
+      allow write: if isSuper() || bootstrapping();
     }
 
-    match /users/{uid} {
-      allow read: if isSelf(uid) || isAdmin();
-      allow create: if isAdmin()
-        || (isSelf(uid)
-            && request.resource.data.role == 'ADMIN'
-            && !exists(setupPath())
-            && existsAfter(setupPath()));
-      allow update: if isAdmin()
-        || (isSelf(uid) && isActive()
+    // ---------- companies ----------
+    match /companies/{cid} {
+      allow read: if isSuper() || isMemberOf(cid);
+      allow create, delete: if isSuper();
+      // A company admin may change only its own settings and the user counters (by one at a time).
+      allow update: if isSuper()
+        || (isAdminOf(cid) && companyUsable(cid)
             && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['lastLoginAt', 'appVersion']));
-      allow delete: if isAdmin() && uid != request.auth.uid;
+                 .hasOnly(['settings', 'userCount', 'adminCount', 'updatedAt'])
+            && counterOk('userCount', 'maxUsers')
+            && counterOk('adminCount', 'maxAdmins'));
 
-      // Workdays, stays and GPS track chunks.
+      match /places/{placeId} {
+        allow read: if isSuper() || isMemberOf(cid);
+        allow write: if isSuper() || (isAdminOf(cid) && companyUsable(cid));
+      }
+      match /live/{uid} {
+        allow read: if isSuper() || isAdminOf(cid) || (isSelf(uid) && isMemberOf(cid));
+        allow write: if isSelf(uid) && canWorkIn(cid);
+        allow delete: if isSuper() || isAdminOf(cid);
+      }
+      match /payments/{paymentId} {
+        allow read: if isSuper() || isAdminOf(cid);
+        allow write: if isSuper();
+      }
+    }
+
+    // ---------- people ----------
+    match /users/{uid} {
+      allow read: if isSelf(uid) || isSuper()
+        || (isActiveUser() && me().role == 'ADMIN' && resource.data.get('companyId', '') == me().companyId);
+
+      allow create: if isSuper()
+        || (isSelf(uid) && request.resource.data.role == 'SUPER_ADMIN' && bootstrapping())
+        || (isAdminOf(request.resource.data.companyId)
+            && request.resource.data.role in ['ADMIN', 'EMPLOYEE']
+            && companyUsable(request.resource.data.companyId)
+            // The same batch must bump the company's user counter within its limit
+            // (and the admin counter too when the new person is an administrator).
+            && getAfter(companyPath(request.resource.data.companyId)).data.userCount
+                 == company(request.resource.data.companyId).userCount + 1
+            && (request.resource.data.role != 'ADMIN'
+                || getAfter(companyPath(request.resource.data.companyId)).data.adminCount
+                     == company(request.resource.data.companyId).adminCount + 1));
+
+      allow update: if isSuper()
+        || (isAdminOf(resource.data.get('companyId', '')) && uid != request.auth.uid
+            && request.resource.data.companyId == resource.data.companyId
+            && request.resource.data.role in ['ADMIN', 'EMPLOYEE']
+            // Promoting / demoting must move the admin counter in the same batch.
+            && (request.resource.data.role == resource.data.role
+                || getAfter(companyPath(resource.data.companyId)).data.adminCount
+                     == company(resource.data.companyId).adminCount
+                        + (request.resource.data.role == 'ADMIN' ? 1 : -1)))
+        || (isAdminOf(resource.data.get('companyId', '')) && uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'department', 'lastLoginAt', 'appVersion']))
+        || (isSelf(uid) && isActiveUser()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLoginAt', 'appVersion']));
+
+      allow delete: if isSuper()
+        || (isAdminOf(resource.data.get('companyId', '')) && uid != request.auth.uid);
+
+      // Workdays, visits and GPS track chunks.
       match /days/{date}/{document=**} {
-        allow read: if (isSelf(uid) && isActive()) || isAdmin();
-        allow write: if isSelf(uid) && isActive();
+        allow read: if isSelf(uid) || isSuper()
+          || (isActiveUser() && me().role == 'ADMIN' && get(userPath(uid)).data.get('companyId', '') == me().companyId);
+        allow write: if isSelf(uid) && canWorkIn(me().companyId);
       }
-      match /days/{date} {
-        allow read: if (isSelf(uid) && isActive()) || isAdmin();
-        allow write: if isSelf(uid) && isActive();
-      }
-    }
-
-    // Latest position and device status, one small document per employee.
-    match /live/{uid} {
-      allow read: if isSelf(uid) || isAdmin();
-      allow write: if isSelf(uid) && isActive();
-      allow delete: if isAdmin();
-    }
-
-    // Offices / client sites that stays are matched against.
-    match /places/{placeId} {
-      allow read: if isActive();
-      allow write: if isAdmin();
     }
   }
 }

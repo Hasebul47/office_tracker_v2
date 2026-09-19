@@ -49,6 +49,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,7 +64,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.officetracker.core.model.DayDetail
+import com.officetracker.core.model.Features
 import com.officetracker.core.model.LiveState
 import com.officetracker.core.model.PlaceCategory
 import com.officetracker.core.model.Stay
@@ -131,6 +134,7 @@ fun LiveState?.statusColor(now: Long): Color = when {
 @Composable
 fun DayStats(day: Workday?, visits: Int, ratePerKm: Double, now: Long, modifier: Modifier = Modifier) {
     val distance = day?.distanceMeters ?: 0.0
+    val features by rememberFeatures()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatTile("On duty", Dates.duration(day?.activeMillis(now) ?: 0), Icons.Default.Schedule, Modifier.weight(1f))
@@ -138,9 +142,13 @@ fun DayStats(day: Workday?, visits: Int, ratePerKm: Double, now: Long, modifier:
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatTile("Visits", visits.toString(), Icons.Default.Place, Modifier.weight(1f), tint = Brand.Success)
-            StatTile("Allowance", Format.taka(Format.allowance(distance, ratePerKm)), Icons.Default.Payments, Modifier.weight(1f), tint = Brand.Warning)
+            if (features.allowance) {
+                StatTile("Allowance", Format.taka(Format.allowance(distance, ratePerKm)), Icons.Default.Payments, Modifier.weight(1f), tint = Brand.Warning)
+            } else {
+                StatTile("Pauses", (day?.pauseCount ?: 0).toString(), Icons.Default.Schedule, Modifier.weight(1f), tint = Brand.Warning)
+            }
         }
-        if (day != null && day.mockCount > 0) {
+        if (day != null && day.mockCount > 0 && features.fakeGpsAlerts) {
             Banner(
                 text = "Fake GPS was detected ${day.mockCount} times on this day.",
                 icon = Icons.Default.Warning, color = Brand.Danger,
@@ -148,6 +156,11 @@ fun DayStats(day: Workday?, visits: Int, ratePerKm: Double, now: Long, modifier:
         }
     }
 }
+
+/** The signed-in company's feature switches (all on for the super admin). Live-updating. */
+@Composable
+fun rememberFeatures(): State<Features> =
+    com.officetracker.OfficeTrackerApp.container.org.features.collectAsStateWithLifecycle()
 
 // ---------- Map ----------
 

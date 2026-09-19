@@ -21,6 +21,7 @@ class SessionStore(private val context: Context) {
         val phone = stringPreferencesKey("phone")
         val role = stringPreferencesKey("role")
         val department = stringPreferencesKey("department")
+        val companyId = stringPreferencesKey("company_id")
         val lastUpdateCheck = longPreferencesKey("last_update_check")
         val skippedVersion = stringPreferencesKey("skipped_version")
         val backgroundPrompted = booleanPreferencesKey("background_prompted")
@@ -33,6 +34,7 @@ class SessionStore(private val context: Context) {
             it[Keys.phone] = p.phone
             it[Keys.role] = p.role.name
             it[Keys.department] = p.department
+            if (p.companyId != null) it[Keys.companyId] = p.companyId else it.remove(Keys.companyId)
         }
     }
 
@@ -47,13 +49,14 @@ class SessionStore(private val context: Context) {
             department = prefs[Keys.department].orEmpty(),
             disabled = false,
             createdAt = 0L,
+            companyId = prefs[Keys.companyId],
         )
     }
 
     suspend fun clearProfile() {
         context.dataStore.edit {
             it.remove(Keys.uid); it.remove(Keys.name); it.remove(Keys.phone)
-            it.remove(Keys.role); it.remove(Keys.department)
+            it.remove(Keys.role); it.remove(Keys.department); it.remove(Keys.companyId)
         }
     }
 

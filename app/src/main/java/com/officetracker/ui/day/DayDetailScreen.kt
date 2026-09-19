@@ -61,6 +61,7 @@ import com.officetracker.ui.components.SectionTitle
 import com.officetracker.ui.components.StatusPill
 import com.officetracker.ui.components.color
 import com.officetracker.ui.components.label
+import com.officetracker.ui.components.rememberFeatures
 import com.officetracker.ui.components.rememberNow
 import com.officetracker.ui.components.TimelineStatic
 import com.officetracker.ui.history.OfficeConfig
@@ -141,6 +142,7 @@ fun DayDetailScreen(viewer: UserProfile, uid: String, initialDate: String, onBac
     val vm = appViewModel(key = "day-$uid") { DayViewModel(it, uid, initialDate, isSelf) }
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val features by rememberFeatures()
 
     Scaffold(
         topBar = {
@@ -150,7 +152,7 @@ fun DayDetailScreen(viewer: UserProfile, uid: String, initialDate: String, onBac
                 actions = {
                     if (!state.local) IconButton(onClick = vm::refresh) { Icon(Icons.Default.Refresh, "Refresh") }
                     val d = state.detail
-                    if (d?.workday != null) {
+                    if (d?.workday != null && features.reports) {
                         IconButton(onClick = { context.startActivity(vm.share(viewer, d)) }) { Icon(Icons.Default.Share, "Share report") }
                     }
                 },

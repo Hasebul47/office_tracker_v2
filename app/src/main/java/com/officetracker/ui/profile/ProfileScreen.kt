@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.BatterySaver
+import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
@@ -28,7 +29,6 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -58,9 +58,9 @@ import androidx.lifecycle.viewModelScope
 import com.officetracker.AppContainer
 import com.officetracker.BuildConfig
 import com.officetracker.core.model.AppConfig
+import com.officetracker.core.model.Company
 import com.officetracker.core.model.UserProfile
 import com.officetracker.core.util.Phone
-import com.officetracker.data.repo.LegacyImportReport
 import com.officetracker.ui.appViewModel
 import com.officetracker.ui.components.Avatar
 import com.officetracker.ui.components.ConfirmDialog
@@ -86,7 +86,6 @@ class ProfileViewModel(private val c: AppContainer, private val uid: String) : V
     var busy by mutableStateOf(false)
         private set
     var message by mutableStateOf<String?>(null)
-    var importReport by mutableStateOf<LegacyImportReport?>(null)
 
     fun changePassword(current: String, new: String, confirm: String, onDone: () -> Unit) {
         if (new != confirm) { message = "New passwords do not match."; return }
@@ -99,10 +98,6 @@ class ProfileViewModel(private val c: AppContainer, private val uid: String) : V
 
     fun saveConfig(config: AppConfig) = launchBusy {
         c.org.saveConfig(config).onSuccess { message = "Settings saved." }.onFailure { message = it.message }
-    }
-
-    fun importLegacy() = launchBusy {
-        c.users.importLegacyUsers().onSuccess { importReport = it }.onFailure { message = it.message }
     }
 
     /** Sign-out is blocked while on duty, otherwise the route would silently stop. */
@@ -123,7 +118,12 @@ class ProfileViewModel(private val c: AppContainer, private val uid: String) : V
 }
 
 @Composable
-fun ProfileScreen(profile: UserProfile, onOpenMyHistory: () -> Unit) {
+fun ProfileScreen(
+    profile: UserProfile,
+    company: Company,
+    onOpenMyHistory: () -> Unit,
+    onOpenSubscription: () -> Unit,
+) {
     val vm = appViewModel(key = "profile-${profile.uid}") { ProfileViewModel(it, profile.uid) }
     val config by vm.config.collectAsStateWithLifecycle()
     val update by vm.updates.state.collectAsStateWithLifecycle()
@@ -132,7 +132,6 @@ fun ProfileScreen(profile: UserProfile, onOpenMyHistory: () -> Unit) {
     val askBackground = rememberBackgroundLocationAction()
 
     var changingPassword by remember { mutableStateOf(false) }
-    var confirmImport by remember { mutableStateOf(false) }
     var confirmSignOut by remember { mutableStateOf(false) }
 
     val background = remember(tick) { context.hasBackgroundLocation() }
@@ -162,6 +161,9 @@ fun ProfileScreen(profile: UserProfile, onOpenMyHistory: () -> Unit) {
                 }
             }
 
+            SettingRow(Icons.Default.Business, company.name, if (profile.isAdmin) "${company.planName} · ${company.access(System.currentTimeMillis()).label} · ${company.userCount}/${company.maxUsers} users" else "Your company") {
+                if (profile.isAdmin) onOpenSubscription()
+            }
             if (profile.isAdmin) {
                 SettingRow(Icons.Default.History, "My workdays", "Your own tracked days and monthly report", onClick = onOpenMyHistory)
             }
@@ -186,8 +188,7 @@ fun ProfileScreen(profile: UserProfile, onOpenMyHistory: () -> Unit) {
 
             if (profile.isAdmin) {
                 SectionTitle("Organisation settings")
-                OrgSettingsCard(config, vm.busy, onSave = vm::saveConfig)
-                SettingRow(Icons.Default.Upload, "Import employees from v1", "Moves old accounts to secure logins") { confirmImport = true }
+                OrgSettingsCard(config, vm.busy, showAllowance = company.features.allowance, onSave = vm::saveConfig)
             }
 
             SectionTitle("App")
@@ -217,28 +218,6 @@ fun ProfileScreen(profile: UserProfile, onOpenMyHistory: () -> Unit) {
         ChangePasswordDialog(busy = vm.busy, onDismiss = { changingPassword = false }) { cur, new, confirm ->
             vm.changePassword(cur, new, confirm) { changingPassword = false }
         }
-    }
-    if (confirmImport) {
-        ConfirmDialog(
-            title = "Import v1 employees?",
-            message = "Each old account gets a secure login with its existing password, and the old record (with its plain-text password) is deleted. Run this once after upgrading.",
-            confirmLabel = "Import",
-            onConfirm = vm::importLegacy,
-            onDismiss = { confirmImport = false },
-        )
-    }
-    vm.importReport?.let { report ->
-        AlertDialog(
-            onDismissRequest = { vm.importReport = null },
-            title = { Text("Imported ${report.imported} employees") },
-            text = {
-                Text(
-                    if (report.skipped.isEmpty()) "All old accounts were migrated."
-                    else "Not imported:\n" + report.skipped.joinToString("\n") { "• $it" }
-                )
-            },
-            confirmButton = { TextButton(onClick = { vm.importReport = null }) { Text("OK") } },
-        )
     }
     if (confirmSignOut) {
         AlertDialog(
@@ -284,7 +263,7 @@ private fun CheckRow(icon: ImageVector, title: String, subtitle: String, ok: Boo
 }
 
 @Composable
-private fun OrgSettingsCard(config: AppConfig, busy: Boolean, onSave: (AppConfig) -> Unit) {
+private fun OrgSettingsCard(config: AppConfig, busy: Boolean, showAllowance: Boolean, onSave: (AppConfig) -> Unit) {
     var rate by remember(config) { mutableStateOf(config.ratePerKm.toString()) }
     var radius by remember(config) { mutableStateOf(config.stayRadiusMeters.toInt().toString()) }
     var minutes by remember(config) { mutableStateOf(config.minStayMinutes.toString()) }
@@ -296,7 +275,7 @@ private fun OrgSettingsCard(config: AppConfig, busy: Boolean, onSave: (AppConfig
                 Spacer(Modifier.width(8.dp))
                 Text("Applies to every employee's phone", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            NumberField("Travel allowance per km (৳)", rate) { rate = it }
+            if (showAllowance) NumberField("Travel allowance per km (৳)", rate) { rate = it }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 NumberField("Visit radius (m)", radius, Modifier.weight(1f)) { radius = it }
                 NumberField("Min. visit (min)", minutes, Modifier.weight(1f)) { minutes = it }

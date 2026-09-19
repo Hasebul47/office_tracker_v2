@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
 package com.officetracker.ui.admin
 
@@ -73,6 +73,10 @@ import com.officetracker.ui.theme.Brand
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.YearMonth
@@ -86,12 +90,15 @@ class EmployeeViewModel(private val c: AppContainer, private val uid: String) : 
         .catch { message = it.message; emit(null) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val live: StateFlow<LiveState?> = c.org.observeLive(uid)
-        .catch { emit(null) }
+    val live: StateFlow<LiveState?> = profile
+        .map { it?.companyId }
+        .distinctUntilChanged()
+        .flatMapLatest { cid -> if (cid == null) flowOf(null) else c.org.observeLive(cid, uid).catch { emit(null) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun update(name: String, department: String, role: Role, onDone: () -> Unit) = launchBusy {
-        c.users.updateEmployee(uid, name, department, role).onSuccess { onDone() }.onFailure { message = it.message }
+        val before = profile.value ?: return@launchBusy
+        c.users.updateUser(before, name, department, role).onSuccess { onDone() }.onFailure { message = it.message }
     }
 
     fun setDisabled(disabled: Boolean) = launchBusy {
@@ -101,7 +108,8 @@ class EmployeeViewModel(private val c: AppContainer, private val uid: String) : 
     }
 
     fun delete(onDone: () -> Unit) = launchBusy {
-        c.users.deleteEmployee(uid).onSuccess { onDone() }.onFailure { message = it.message }
+        val user = profile.value ?: return@launchBusy
+        c.users.deleteUser(user).onSuccess { onDone() }.onFailure { message = it.message }
     }
 
     fun exportMonth(profile: UserProfile, month: YearMonth, onReady: (Intent) -> Unit) = launchBusy {
@@ -131,6 +139,7 @@ fun EmployeeScreen(viewer: UserProfile, uid: String, onBack: () -> Unit) {
     val profile by vm.profile.collectAsStateWithLifecycle()
     val live by vm.live.collectAsStateWithLifecycle()
     val day by dayVm.state.collectAsStateWithLifecycle()
+    val features by com.officetracker.OfficeTrackerApp.container.org.features.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val now = rememberNow()
 
@@ -148,7 +157,9 @@ fun EmployeeScreen(viewer: UserProfile, uid: String, onBack: () -> Unit) {
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = {
                     if (p != null) {
-                        IconButton(onClick = { reporting = true }) { Icon(Icons.Default.Summarize, "Monthly report") }
+                        if (viewer.isSuperAdmin || features.reports) {
+                            IconButton(onClick = { reporting = true }) { Icon(Icons.Default.Summarize, "Monthly report") }
+                        }
                         Box {
                             IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More") }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

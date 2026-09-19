@@ -80,6 +80,7 @@ import com.officetracker.ui.components.label
 import com.officetracker.ui.components.appSettingsIntent
 import com.officetracker.ui.components.rememberBackgroundLocationAction
 import com.officetracker.ui.components.rememberLocationReadyAction
+import com.officetracker.ui.components.rememberFeatures
 import com.officetracker.ui.components.rememberNow
 import com.officetracker.ui.components.rememberResumeTick
 import com.officetracker.ui.components.safeStart
@@ -148,6 +149,7 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
     val context = LocalContext.current
     val now = rememberNow(15_000)
     val tick = rememberResumeTick()
+    val features by rememberFeatures()
 
     var editing by remember { mutableStateOf<Stay?>(null) }
     var confirmEnd by remember { mutableStateOf(false) }
@@ -237,7 +239,7 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
         item { DayMapCard(d) }
         item {
             SectionTitle("Visits") {
-                if (day != null) {
+                if (day != null && features.reports) {
                     IconButton(onClick = { context.startActivity(vm.shareDay(profile, d)) }) {
                         Icon(Icons.Default.Share, contentDescription = "Share report")
                     }
