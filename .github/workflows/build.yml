@@ -1,28 +1,37 @@
-name: Build Android App
+name: Build & release Android app
 
+# Every push to main builds a signed APK with a higher version and publishes it as a
+# GitHub Release. Installed phones see the "Update available" pop-up and update in place.
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
+env:
+  # Major.minor of the app; the patch number is the CI run number, so it always increases.
+  VERSION_BASE: "2.1"
+  # versionCode = offset + run number (must stay above every version already installed).
+  VERSION_CODE_OFFSET: "100"
+
 jobs:
   build:
-    name: Test, build & package
+    name: Test, build, sign & release
     runs-on: ubuntu-latest
     env:
       OT_KEYSTORE_PASSWORD: ${{ secrets.OT_KEYSTORE_PASSWORD }}
       OT_KEY_ALIAS: ${{ secrets.OT_KEY_ALIAS }}
       OT_KEY_PASSWORD: ${{ secrets.OT_KEY_PASSWORD }}
+      # Optional: publish releases to another (public) repository, e.g. when this one is private.
+      OT_RELEASE_REPO: ${{ vars.OT_RELEASE_REPO }}
 
     steps:
       - uses: actions/checkout@v4
@@ -37,8 +46,16 @@ jobs:
 
       - run: chmod +x gradlew
 
-      # The signing keystore lives only in GitHub secrets (never in the repository).
-      # Secrets: OT_KEYSTORE_BASE64, OT_KEYSTORE_PASSWORD, OT_KEY_ALIAS, OT_KEY_PASSWORD
+      - name: Compute version
+        run: |
+          CODE=$(( ${VERSION_CODE_OFFSET} + ${{ github.run_number }} ))
+          NAME="${VERSION_BASE}.${{ github.run_number }}"
+          echo "OT_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "OT_VERSION_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Building version $NAME (code $CODE)"
+
+      # The same signing key must be used for every build, otherwise Android refuses the update
+      # ("App not installed as package conflicts with an existing package").
       - name: Restore signing keystore
         env:
           OT_KEYSTORE_BASE64: ${{ secrets.OT_KEYSTORE_BASE64 }}
@@ -47,8 +64,11 @@ jobs:
             echo "$OT_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
             echo "OT_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
             echo "Signing key restored."
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "::warning::No signing key on pull requests - the APK is for testing only."
           else
-            echo "::warning::OT_KEYSTORE_BASE64 secret not set - APK will be signed with a throwaway debug key and cannot update installed apps."
+            echo "::error::Secret OT_KEYSTORE_BASE64 is not set. Without a fixed signing key, phones cannot update the app. See README > Signing and releases."
+            exit 1
           fi
 
       - name: Unit tests
@@ -66,16 +86,23 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: office-tracker-apk
+          name: office-tracker-${{ env.OT_VERSION_NAME }}
           path: out/*
           retention-days: 30
 
-      - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish GitHub release (triggers the in-app update pop-up)
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.OT_VERSION_NAME }}
+          name: Office Tracker ${{ env.OT_VERSION_NAME }}
+          target_commitish: ${{ vars.OT_RELEASE_REPO == '' && github.sha || '' }}
+          repository: ${{ vars.OT_RELEASE_REPO || github.repository }}
+          token: ${{ secrets.OT_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           files: out/*
-          generate_release_notes: true
+          generate_release_notes: ${{ vars.OT_RELEASE_REPO == '' }}
+          body: |
+            ${{ github.event.head_commit.message }}
           make_latest: true
 
       - name: Upload test reports

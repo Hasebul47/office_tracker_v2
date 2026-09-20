@@ -16,7 +16,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -32,7 +33,8 @@ fun UpdatePrompt() {
     val state by updates.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    LaunchedEffect(Unit) { updates.check(force = false) }
+    // Checked when the app opens and every time it comes back to the foreground (at most every 30 min).
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { updates.check(force = false) }
 
     val info = state.available
     if (!state.showDialog || info == null) return
@@ -72,7 +74,8 @@ fun UpdatePrompt() {
         },
         dismissButton = {
             if (state.progress == null) {
-                TextButton(onClick = { updates.dismiss(skipVersion = true) }) { Text("Skip this version") }
+                // "Later" only hides it; it comes back next time the app is opened.
+                TextButton(onClick = { updates.dismiss(skipVersion = false) }) { Text("Later") }
             }
         },
     )

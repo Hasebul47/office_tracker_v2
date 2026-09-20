@@ -43,7 +43,7 @@ class UpdateManager(
     suspend fun checkForUpdate(force: Boolean = false): Result<UpdateInfo?> = withContext(Dispatchers.IO) {
         runCatching {
             val now = System.currentTimeMillis()
-            if (!force && now - store.lastUpdateCheck() < 6 * 3_600_000L) return@runCatching null
+            if (!force && now - store.lastUpdateCheck() < 30 * 60_000L) return@runCatching null
             val request = Request.Builder()
                 .url("https://api.github.com/repos/${BuildConfig.GITHUB_REPO}/releases/latest")
                 .header("Accept", "application/vnd.github+json")
@@ -58,7 +58,6 @@ class UpdateManager(
             val json = JSONObject(body)
             val version = json.optString("tag_name").removePrefix("v").removePrefix("V")
             if (!isNewer(version, BuildConfig.VERSION_NAME)) return@runCatching null
-            if (!force && store.skippedVersion() == version) return@runCatching null
 
             val assets = json.optJSONArray("assets")
             var apkUrl: String? = null
@@ -125,7 +124,10 @@ class UpdateManager(
             }
             if (signatureMismatch(file)) {
                 file.delete()
-                error("This update is not signed with the company key and was blocked.")
+                error(
+                    "This update is signed with a different key than the installed app, so Android would refuse it. " +
+                        "Uninstall the app once and install the new version; later updates will then work."
+                )
             }
             file
         }

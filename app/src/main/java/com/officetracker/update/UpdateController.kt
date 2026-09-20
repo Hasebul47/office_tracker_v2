@@ -26,6 +26,11 @@ class UpdateController(private val manager: UpdateManager, private val scope: Co
 
     fun check(force: Boolean) {
         if (_state.value.checking) return
+        // Already downloaded or showing: don't ask again, just re-show the dialog.
+        if (!force && _state.value.available != null) {
+            _state.update { it.copy(showDialog = true) }
+            return
+        }
         _state.update { it.copy(checking = true, message = null) }
         scope.launch {
             manager.checkForUpdate(force)

@@ -15,6 +15,11 @@ fun secret(name: String): String? =
   (System.getenv(name) ?: providers.gradleProperty(name).orNull)?.takeIf { it.isNotBlank() }
 
 val keystorePath = secret("OT_KEYSTORE_FILE")
+
+// ---- Versioning / updates ------------------------------------------------------------------
+val ciVersionCode = secret("OT_VERSION_CODE")?.toIntOrNull()
+val ciVersionName = secret("OT_VERSION_NAME")
+val releaseRepo = secret("OT_RELEASE_REPO") ?: secret("GITHUB_REPOSITORY") ?: "Hasebul47/office_tracker_v2"
 val hasReleaseKey = keystorePath != null && file(keystorePath).exists()
 
 android {
@@ -26,13 +31,15 @@ android {
     applicationId = "com.aistudio.officetracker.vmpjxq"
     minSdk = 26
     targetSdk = 36
-    versionCode = 21
-    versionName = "2.1.0"
+    // CI sets these from the build number so every push is a newer, installable update.
+    versionCode = ciVersionCode ?: 21
+    versionName = ciVersionName ?: "2.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     // Change these if you fork the repository or use a different login domain.
-    buildConfigField("String", "GITHUB_REPO", "\"Hasebul47/Office_location_tracker\"")
+    // Where the app looks for updates: the repository that publishes the releases.
+    buildConfigField("String", "GITHUB_REPO", "\"$releaseRepo\"")
     buildConfigField("String", "AUTH_EMAIL_DOMAIN", "\"staff.officetracker.app\"")
   }
 

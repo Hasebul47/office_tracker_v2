@@ -101,9 +101,26 @@ If Firestore shows an error with an index link the first time you open a list, c
    Phones must uninstall v1 and install v2 **once**, because Android only accepts updates signed with the same key.
    After that, in-app updates work normally.
 
-## Signing and releases (GitHub Actions)
+## Signing, releases and in-app updates
 
-Create a new key on your computer (keep the file and passwords safe and private):
+**How updates reach phones.** Every push to `main` runs GitHub Actions, which:
+
+1. Tests, then builds a release APK with version `2.1.<run number>`. The version code goes up with every build.
+2. Signs it with **your** key (from GitHub secrets).
+3. Publishes a GitHub Release with the APK and its SHA-256 checksum.
+
+Installed apps check for a new release every time they are opened or brought back, at most every 30 minutes.
+When one exists they show **Update available → Download → Install**. The download is checked against its checksum
+and signing key, and Android installs it over the old app: same package, same data, and the user stays signed in.
+
+**Why "App not installed as package conflicts with an existing package" happens.** The installed APK and the new APK
+were signed with different keys. Android never allows that. It happens whenever CI builds without your key,
+because each GitHub runner then makes a throwaway key. The workflow now **refuses to release** without the key,
+so this can't happen again once the key is set.
+
+### One-time: create the signing key and add it to GitHub
+
+On your computer (keep the `.jks` file and passwords somewhere safe; losing them means users must reinstall):
 
 ```bash
 keytool -genkeypair -v -keystore officetracker-release.jks -alias officetracker \
@@ -111,23 +128,38 @@ keytool -genkeypair -v -keystore officetracker-release.jks -alias officetracker 
 base64 -w0 officetracker-release.jks > keystore.b64   # macOS: base64 -i officetracker-release.jks > keystore.b64
 ```
 
-Then add these under GitHub repository > Settings > Secrets and variables > Actions:
+GitHub repository > Settings > Secrets and variables > Actions > **New repository secret**:
 
 | Secret | Value |
 |---|---|
 | `OT_KEYSTORE_BASE64` | contents of `keystore.b64` |
 | `OT_KEYSTORE_PASSWORD` | keystore password |
 | `OT_KEY_ALIAS` | `officetracker` |
-| `OT_KEY_PASSWORD` | key password |
+| `OT_KEY_PASSWORD` | key password (same as keystore password if you pressed Enter) |
 
-Delete `keystore/officetracker.jks` from the repository and from its git history (`git filter-repo --path keystore --invert-paths`).
+**After adding the key:** phones that have an APK signed with a different key must **uninstall once** and install the first
+build made with the new key (download it from the Release page). Every later update installs in place.
 
-**Publishing an update:** bump `versionCode` and `versionName` in `app/build.gradle.kts`, commit, then
-`git tag v2.0.1 && git push --tags`. The workflow runs the tests, builds a signed APK, and publishes a GitHub Release
-with the APK and its `.sha256` file. Phones pick it up within 6 hours, or at once from **Profile > Check for updates**.
+### If the repository is private
 
-To build locally, put the same four values in `~/.gradle/gradle.properties` (`OT_KEYSTORE_FILE=/path/to/file.jks`, and so on).
-Without them, the build falls back to the debug key.
+Phones can't read releases of a private repository without a login. Use a separate **public** repository only for releases:
+
+1. Create an empty public repository, e.g. `Hasebul47/office-tracker-releases`, with a README so it has one commit.
+2. Create a fine-grained personal access token with **Contents: Read and write** on that repository only.
+3. In the private app repository, add:
+   - the secret `OT_RELEASE_TOKEN` = the token;
+   - the variable (Settings > Secrets and variables > Actions > **Variables**) `OT_RELEASE_REPO` = `Hasebul47/office-tracker-releases`.
+
+Builds then publish there, and the app checks there automatically. If the repository is public, skip this: the app checks
+the repository that built it.
+
+### Forcing everyone onto a new version
+
+Super admin > Platform > **Minimum app version code**: set it to the new build's code (100 + the run number, shown in the
+Actions log and the release title). Older phones then show a blocking "Update required" screen until they update.
+
+To build locally, put the same values in `~/.gradle/gradle.properties` (`OT_KEYSTORE_FILE=/path/to/file.jks`, `OT_KEYSTORE_PASSWORD=…`, and so on).
+Without them, a local build uses the debug key.
 
 ## How tracking works
 

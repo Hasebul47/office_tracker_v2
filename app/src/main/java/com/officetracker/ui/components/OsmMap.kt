@@ -41,7 +41,7 @@ import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.ITileSource
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.tileprovider.tilesource.XYZTileSource
+import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -70,7 +70,7 @@ enum class MapLayer(val label: String) { STANDARD("Standard"), LIGHT("Light"), D
 private val Dhaka = GeoPoint(23.8103, 90.4125)
 
 private object Tiles {
-    private val cartoLight = XYZTileSource(
+    private val cartoLight = XYTileSource(
         "CartoLight", 1, 20, 256, ".png",
         arrayOf(
             "https://a.basemaps.cartocdn.com/light_all/",
@@ -79,7 +79,7 @@ private object Tiles {
         ),
         "© OpenStreetMap contributors © CARTO",
     )
-    private val cartoDark = XYZTileSource(
+    private val cartoDark = XYTileSource(
         "CartoDark", 1, 20, 256, ".png",
         arrayOf(
             "https://a.basemaps.cartocdn.com/dark_all/",
