@@ -50,7 +50,6 @@ import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
-import org.osmdroid.views.overlay.TilesOverlay
 
 data class MapMarker(
     val id: String,
@@ -68,6 +67,16 @@ data class MapCircle(val latitude: Double, val longitude: Double, val radiusMete
 enum class MapLayer(val label: String) { STANDARD("Standard"), TOPO("Terrain"), DARK("Dark") }
 
 private val Dhaka = GeoPoint(23.8103, 90.4125)
+
+/** Night map: inverts the standard tiles and softens the result (plain Android colour filter). */
+private val DarkTiles = android.graphics.ColorMatrixColorFilter(
+    floatArrayOf(
+        -0.85f, 0f, 0f, 0f, 235f,
+        0f, -0.85f, 0f, 0f, 235f,
+        0f, 0f, -0.80f, 0f, 240f,
+        0f, 0f, 0f, 1f, 0f,
+    )
+)
 
 /** Free, key-less tile sources. "Dark" is the standard map with inverted colours. */
 private object Tiles {
@@ -165,7 +174,7 @@ fun OsmMap(
 
             if (cache.layer != layer) {
                 map.setTileSource(Tiles.of(layer))
-                map.overlayManager.tilesOverlay.setColorFilter(if (layer == MapLayer.DARK) TilesOverlay.INVERTED_COLORS else null)
+                map.overlayManager.tilesOverlay.setColorFilter(if (layer == MapLayer.DARK) DarkTiles else null)
                 cache.layer = layer
             }
             if (cache.events == null) {
