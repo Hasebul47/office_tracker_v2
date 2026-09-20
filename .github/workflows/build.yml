@@ -54,22 +54,24 @@ jobs:
           echo "OT_VERSION_NAME=$NAME" >> "$GITHUB_ENV"
           echo "Building version $NAME (code $CODE)"
 
-      # The same signing key must be used for every build, otherwise Android refuses the update
-      # ("App not installed as package conflicts with an existing package").
-      - name: Restore signing keystore
+      # Signing: the project's own keystore/officetracker.jks is used automatically, so every
+      # build has the same key and installs over the previous one. (Optional override: secret
+      # OT_KEYSTORE_BASE64 + OT_KEYSTORE_PASSWORD / OT_KEY_ALIAS / OT_KEY_PASSWORD.)
+      - name: Optional signing key override
         env:
           OT_KEYSTORE_BASE64: ${{ secrets.OT_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$OT_KEYSTORE_BASE64" ]; then
             echo "$OT_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
             echo "OT_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-            echo "Signing key restored."
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "::warning::No signing key on pull requests - the APK is for testing only."
+            echo "Using signing key from secrets."
           else
-            echo "::error::Secret OT_KEYSTORE_BASE64 is not set. Without a fixed signing key, phones cannot update the app. See README > Signing and releases."
-            exit 1
+            test -f keystore/officetracker.jks || { echo "::error::keystore/officetracker.jks is missing"; exit 1; }
+            echo "Using keystore/officetracker.jks from the repository."
           fi
+
+      - name: Show signing certificate (must stay the same for every release)
+        run: keytool -list -keystore "${OT_KEYSTORE_FILE:-keystore/officetracker.jks}" -storepass "${OT_KEYSTORE_PASSWORD:-officetracker_key_2026}" -storetype PKCS12 | grep -i sha || true
 
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --stacktrace

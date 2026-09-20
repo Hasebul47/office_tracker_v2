@@ -9,6 +9,5 @@
 /captures
 .externalNativeBuild
 .cxx
-*.jks
 *.keystore
-keystore/
+# keystore/officetracker.jks IS committed on purpose (same key for every build).

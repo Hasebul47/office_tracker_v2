@@ -8,19 +8,23 @@ plugins {
 }
 
 // ---- Signing -------------------------------------------------------------------------------
-// The keystore is NEVER committed. Provide it through environment variables (GitHub Actions
-// secrets) or ~/.gradle/gradle.properties on your own machine:
-//   OT_KEYSTORE_FILE, OT_KEYSTORE_PASSWORD, OT_KEY_ALIAS, OT_KEY_PASSWORD
+// Every build (GitHub or local, debug or release) is signed with the SAME key, so a new APK
+// always installs over the old one. The key ships in keystore/ - keep this repository private.
+// To use a different key, set OT_KEYSTORE_FILE / OT_KEYSTORE_PASSWORD / OT_KEY_ALIAS /
+// OT_KEY_PASSWORD as environment variables or in ~/.gradle/gradle.properties.
 fun secret(name: String): String? =
   (System.getenv(name) ?: providers.gradleProperty(name).orNull)?.takeIf { it.isNotBlank() }
 
-val keystorePath = secret("OT_KEYSTORE_FILE")
+val keystorePath = secret("OT_KEYSTORE_FILE") ?: rootProject.file("keystore/officetracker.jks").path
+val keystorePassword = secret("OT_KEYSTORE_PASSWORD") ?: "officetracker_key_2026"
+val keyAliasName = secret("OT_KEY_ALIAS") ?: "officetracker"
+val keyPasswordValue = secret("OT_KEY_PASSWORD") ?: keystorePassword
 
 // ---- Versioning / updates ------------------------------------------------------------------
 val ciVersionCode = secret("OT_VERSION_CODE")?.toIntOrNull()
 val ciVersionName = secret("OT_VERSION_NAME")
 val releaseRepo = secret("OT_RELEASE_REPO") ?: secret("GITHUB_REPOSITORY") ?: "Hasebul47/office_tracker_v2"
-val hasReleaseKey = keystorePath != null && file(keystorePath).exists()
+val hasReleaseKey = file(keystorePath).exists()
 
 android {
   namespace = "com.officetracker"
@@ -46,10 +50,11 @@ android {
   signingConfigs {
     if (hasReleaseKey) {
       create("release") {
-        storeFile = file(keystorePath!!)
-        storePassword = secret("OT_KEYSTORE_PASSWORD")
-        keyAlias = secret("OT_KEY_ALIAS")
-        keyPassword = secret("OT_KEY_PASSWORD")
+        storeFile = file(keystorePath)
+        storePassword = keystorePassword
+        keyAlias = keyAliasName
+        keyPassword = keyPasswordValue
+        storeType = "PKCS12"
       }
     }
   }

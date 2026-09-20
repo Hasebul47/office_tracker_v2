@@ -113,32 +113,16 @@ Installed apps check for a new release every time they are opened or brought bac
 When one exists they show **Update available → Download → Install**. The download is checked against its checksum
 and signing key, and Android installs it over the old app: same package, same data, and the user stays signed in.
 
-**Why "App not installed as package conflicts with an existing package" happens.** The installed APK and the new APK
-were signed with different keys. Android never allows that. It happens whenever CI builds without your key,
-because each GitHub runner then makes a throwaway key. The workflow now **refuses to release** without the key,
-so this can't happen again once the key is set.
+**Signing: no setup needed.** Every build is signed with `keystore/officetracker.jks`, which is committed to the repository.
+This is the same key v1 used. Because the key never changes, a new APK always installs over the old one and never shows
+"App not installed as package conflicts with an existing package". Keep the repository **private**:
+anyone with the key file can sign an APK that phones accept as an update.
 
-### One-time: create the signing key and add it to GitHub
+**One-time exception.** Phones that installed a v2 test build made before this change were signed with a random,
+throwaway key. They must uninstall once and install the latest release. Phones still on v1 update in place.
 
-On your computer (keep the `.jks` file and passwords somewhere safe; losing them means users must reinstall):
-
-```bash
-keytool -genkeypair -v -keystore officetracker-release.jks -alias officetracker \
-  -keyalg RSA -keysize 4096 -validity 10000
-base64 -w0 officetracker-release.jks > keystore.b64   # macOS: base64 -i officetracker-release.jks > keystore.b64
-```
-
-GitHub repository > Settings > Secrets and variables > Actions > **New repository secret**:
-
-| Secret | Value |
-|---|---|
-| `OT_KEYSTORE_BASE64` | contents of `keystore.b64` |
-| `OT_KEYSTORE_PASSWORD` | keystore password |
-| `OT_KEY_ALIAS` | `officetracker` |
-| `OT_KEY_PASSWORD` | key password (same as keystore password if you pressed Enter) |
-
-**After adding the key:** phones that have an APK signed with a different key must **uninstall once** and install the first
-build made with the new key (download it from the Release page). Every later update installs in place.
+(Optional: to switch to a private key later, add the secrets `OT_KEYSTORE_BASE64`, `OT_KEYSTORE_PASSWORD`, `OT_KEY_ALIAS` and
+`OT_KEY_PASSWORD`. Changing the key again needs one more reinstall on every phone.)
 
 ### If the repository is private
 
