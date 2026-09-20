@@ -30,7 +30,9 @@ import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +62,7 @@ import com.officetracker.core.model.WorkStatus
 import com.officetracker.core.model.Workday
 import com.officetracker.core.model.WorkSchedule
 import com.officetracker.ui.components.summary
+import com.officetracker.ui.components.autostartIntent
 import com.officetracker.core.model.effectiveDistance
 import com.officetracker.core.util.Dates
 import com.officetracker.ui.appViewModel
@@ -183,6 +186,9 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
         )
     }
 
+    val autoSchedule = profile.effectiveSchedule(config.schedule)?.takeIf { features.scheduler }
+    var autostartHidden by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+
     LazyColumn(
         Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = PaddingValues(16.dp),
@@ -232,6 +238,7 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
         item {
             WorkdayCard(
                 day = day, status = status, now = now, busy = vm.busy,
+                locked = autoSchedule?.let { it.enforce && it.isWithinHours(now, Dates.zone) } == true,
                 onStart = { pendingAction = DayAction.START; ensureLocation() },
                 onPause = { vm.act(DayAction.PAUSE) },
                 onResume = { pendingAction = DayAction.RESUME; ensureLocation() },
@@ -239,13 +246,22 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
             )
         }
 
-        val autoSchedule = profile.effectiveSchedule(config.schedule)?.takeIf { features.scheduler }
         if (autoSchedule != null) {
             if (autoSchedule.autoStart && permissionState.precise && !permissionState.background) item {
                 Banner(
                     "Allow location \"All the time\" so your workday can start automatically at ${WorkSchedule.formatMinute(autoSchedule.startMinute)}.",
                     Icons.Default.LocationOn, Brand.Warning, actionLabel = "Allow",
                 ) { askBackground() }
+            }
+            if (!autostartHidden) {
+                context.autostartIntent()?.let { intent ->
+                    item {
+                        Banner(
+                            "${android.os.Build.MANUFACTURER} phones block automatic start. Turn ON \"Autostart\" for Office Tracker.",
+                            Icons.Default.Warning, Brand.Warning, actionLabel = "Open",
+                        ) { context.safeStart(intent); autostartHidden = true }
+                    }
+                }
             }
             item {
                 Text(
@@ -286,6 +302,22 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
         item { Spacer(Modifier.height(24.dp)) }
     }
 
+    // A work schedule starts tracking by itself, which Android only allows with "Allow all the time".
+    if (autoSchedule != null && autoSchedule.autoStart && permissionState.precise && !permissionState.background) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Allow location all the time") },
+            text = {
+                Text(
+                    "Your company starts tracking automatically at ${WorkSchedule.formatMinute(autoSchedule.startMinute)}. " +
+                        "Android only allows that if Office Tracker may use location \"All the time\". " +
+                        "On the next screen choose Permissions > Location > Allow all the time."
+                )
+            },
+            confirmButton = { TextButton(onClick = { askBackground() }) { Text("Allow") } },
+        )
+    }
+
     editing?.let { stay ->
         EditStayDialog(stay, onSave = { name, cat -> vm.relabel(stay, name, cat) }, onDismiss = { editing = null })
     }
@@ -314,6 +346,7 @@ private fun WorkdayCard(
     status: WorkStatus,
     now: Long,
     busy: DayAction?,
+    locked: Boolean,
     onStart: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
@@ -355,7 +388,7 @@ private fun WorkdayCard(
                 )
                 WorkStatus.ACTIVE -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
-                        onClick = onPause, enabled = busy == null, modifier = Modifier.weight(1f).height(52.dp),
+                        onClick = onPause, enabled = busy == null && !locked, modifier = Modifier.weight(1f).height(52.dp),
                         shape = MaterialTheme.shapes.medium,
                     ) {
                         Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -364,7 +397,7 @@ private fun WorkdayCard(
                     }
                     LoadingButton(
                         text = "End day", icon = Icons.Default.Stop, loading = busy == DayAction.END, onClick = onEnd,
-                        modifier = Modifier.weight(1f), containerColor = Brand.Danger,
+                        modifier = Modifier.weight(1f), containerColor = Brand.Danger, enabled = !locked,
                     )
                 }
                 WorkStatus.PAUSED -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -377,6 +410,13 @@ private fun WorkdayCard(
                         modifier = Modifier.weight(1f), containerColor = Brand.Danger,
                     )
                 }
+            }
+            if (locked && status == WorkStatus.ACTIVE) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tracking is required during working hours. It ends automatically at the scheduled time.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

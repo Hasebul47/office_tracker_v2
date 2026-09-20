@@ -53,10 +53,10 @@ class ScheduleReceiver : BroadcastReceiver() {
         // does not block: startDay() closes it first.
         if (open != null && open.date == Dates.todayKey()) return
         val time = WorkSchedule.formatMinute(schedule.startMinute)
-        if (!c.locationClient.hasForegroundPermission() || !c.locationClient.hasBackgroundPermission()) {
+        if (!c.locationClient.hasForegroundPermission()) {
             Notifier.alert(
                 context, Notifier.ID_SCHEDULE, "Your workday starts at $time",
-                "Tap to start tracking. Allow location \"All the time\" so it can start by itself.",
+                "Tap to start tracking. Location permission is missing.",
             )
             return
         }
@@ -74,7 +74,7 @@ class ScheduleReceiver : BroadcastReceiver() {
         val uid = c.auth.currentUid ?: return
         val open = c.workdays.openWorkday(uid) ?: return
         if (open.status != WorkStatus.ACTIVE && open.status != WorkStatus.PAUSED) return
-        c.tracking.endDay()
+        c.tracking.endDay(manual = false)
             .onSuccess { Notifier.alert(context, Notifier.ID_SCHEDULE, "Workday ended", "Your workday was ended automatically at the scheduled time.") }
             .onFailure { Notifier.alert(context, Notifier.ID_SCHEDULE, "Couldn't end your workday", "Open the app to end it.") }
     }

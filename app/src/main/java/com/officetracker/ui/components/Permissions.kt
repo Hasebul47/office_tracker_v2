@@ -55,6 +55,36 @@ fun Context.exactAlarmSettingsIntent(): Intent =
         appSettingsIntent()
     }
 
+/**
+ * Phone makers that block background start-up unless the user enables "Autostart"
+ * (without it, schedule alarms and the watchdog never run while the app is closed).
+ */
+fun Context.autostartIntent(): Intent? {
+    val maker = Build.MANUFACTURER.lowercase()
+    val candidates = when {
+        maker in listOf("xiaomi", "redmi", "poco") -> listOf(
+            "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity",
+        )
+        maker in listOf("oppo", "realme", "oneplus") -> listOf(
+            "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
+            "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
+            "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity",
+        )
+        maker == "vivo" -> listOf(
+            "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+            "com.iqoo.secure" to "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager",
+        )
+        maker in listOf("huawei", "honor") -> listOf(
+            "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+        )
+        else -> return null
+    }
+    return candidates
+        .map { (pkg, cls) -> Intent().setClassName(pkg, cls).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        .firstOrNull { it.resolveActivity(packageManager) != null }
+        ?: appSettingsIntent()
+}
+
 fun Context.appSettingsIntent(): Intent =
     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
 

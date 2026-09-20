@@ -141,8 +141,7 @@ private fun RouteExplorer(
 ) {
     val route = detail.route
     val handle = rememberMapHandle()
-    val dark = isSystemInDarkTheme()
-    var layer by rememberSaveable { mutableStateOf(if (dark) MapLayer.DARK else MapLayer.STANDARD) }
+    var layer by rememberSaveable { mutableStateOf(MapLayer.STANDARD) }
     var layersMenu by remember { mutableStateOf(false) }
     // Keyed by day, not by the route list: a live day gets a new list with every GPS fix,
     // which would otherwise clear the tapped point and restart playback from the beginning.

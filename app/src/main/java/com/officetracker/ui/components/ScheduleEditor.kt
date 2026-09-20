@@ -85,6 +85,9 @@ fun ScheduleEditor(schedule: WorkSchedule, onChange: (WorkSchedule) -> Unit) {
             ToggleRow("End the day automatically", schedule.autoEnd, "At the end time, even if someone forgets") {
                 onChange(schedule.copy(autoEnd = it))
             }
+            ToggleRow("Lock tracking during working hours", schedule.enforce, "Staff can't pause or end their day between start and end") {
+                onChange(schedule.copy(enforce = it))
+            }
             OutlinedTextField(
                 value = schedule.lateAfterMinutes.toString(),
                 onValueChange = { v -> v.filter { it.isDigit() }.take(3).toIntOrNull()?.let { onChange(schedule.copy(lateAfterMinutes = it.coerceIn(0, 240))) } },
@@ -129,11 +132,12 @@ private fun ToggleRow(title: String, checked: Boolean, subtitle: String, onChang
 /** One-line description, e.g. "Sat, Sun, Mon · 9:00 AM – 6:00 PM · auto start & end". */
 fun WorkSchedule.summary(): String {
     if (!enabled) return "No schedule"
+    val lock = if (enforce) " · locked" else ""
     val auto = when {
         autoStart && autoEnd -> " · auto start & end"
         autoStart -> " · auto start"
         autoEnd -> " · auto end"
         else -> ""
     }
-    return "${daysLabel()} · ${WorkSchedule.formatMinute(startMinute)} – ${WorkSchedule.formatMinute(endMinute)}$auto"
+    return "${daysLabel()} · ${WorkSchedule.formatMinute(startMinute)} – ${WorkSchedule.formatMinute(endMinute)}$auto$lock"
 }

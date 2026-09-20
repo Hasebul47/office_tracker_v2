@@ -41,7 +41,6 @@ import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.ITileSource
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -51,6 +50,7 @@ import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
+import org.osmdroid.views.overlay.TilesOverlay
 
 data class MapMarker(
     val id: String,
@@ -65,34 +65,15 @@ data class MapMarker(
 
 data class MapCircle(val latitude: Double, val longitude: Double, val radiusMeters: Double, val color: Color)
 
-enum class MapLayer(val label: String) { STANDARD("Standard"), LIGHT("Light"), DARK("Dark") }
+enum class MapLayer(val label: String) { STANDARD("Standard"), TOPO("Terrain"), DARK("Dark") }
 
 private val Dhaka = GeoPoint(23.8103, 90.4125)
 
+/** Free, key-less tile sources. "Dark" is the standard map with inverted colours. */
 private object Tiles {
-    private val cartoLight = XYTileSource(
-        "CartoLight", 1, 20, 256, ".png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/light_all/",
-            "https://b.basemaps.cartocdn.com/light_all/",
-            "https://c.basemaps.cartocdn.com/light_all/",
-        ),
-        "© OpenStreetMap contributors © CARTO",
-    )
-    private val cartoDark = XYTileSource(
-        "CartoDark", 1, 20, 256, ".png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/dark_all/",
-            "https://b.basemaps.cartocdn.com/dark_all/",
-            "https://c.basemaps.cartocdn.com/dark_all/",
-        ),
-        "© OpenStreetMap contributors © CARTO",
-    )
-
     fun of(layer: MapLayer): ITileSource = when (layer) {
-        MapLayer.STANDARD -> TileSourceFactory.MAPNIK
-        MapLayer.LIGHT -> cartoLight
-        MapLayer.DARK -> cartoDark
+        MapLayer.STANDARD, MapLayer.DARK -> TileSourceFactory.MAPNIK
+        MapLayer.TOPO -> TileSourceFactory.OpenTopo
     }
 }
 
@@ -184,6 +165,7 @@ fun OsmMap(
 
             if (cache.layer != layer) {
                 map.setTileSource(Tiles.of(layer))
+                map.overlayManager.tilesOverlay.setColorFilter(if (layer == MapLayer.DARK) TilesOverlay.INVERTED_COLORS else null)
                 cache.layer = layer
             }
             if (cache.events == null) {

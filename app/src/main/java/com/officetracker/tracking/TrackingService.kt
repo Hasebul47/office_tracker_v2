@@ -39,7 +39,11 @@ class TrackingService : LifecycleService() {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
             ACTION_PAUSE -> {
-                lifecycleScope.launch { OfficeTrackerApp.container.tracking.pause() }
+                lifecycleScope.launch {
+                    OfficeTrackerApp.container.tracking.pause().onFailure { e ->
+                        Notifier.alert(this@TrackingService, Notifier.ID_SCHEDULE, "Can't pause now", e.message ?: "")
+                    }
+                }
                 return START_NOT_STICKY
             }
             ACTION_STOP -> {

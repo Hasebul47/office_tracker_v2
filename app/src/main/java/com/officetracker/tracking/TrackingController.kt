@@ -71,7 +71,15 @@ class TrackingController(
         }
     }
 
-    suspend fun pause(): Result<Unit> = runCatching {
+    /** Set by the container; lets the controller respect a locked work schedule. */
+    var scheduleLock: () -> Boolean = { false }
+
+    private fun checkNotLocked() {
+        check(!scheduleLock()) { "Your company requires tracking during working hours. It stops automatically at the end time." }
+    }
+
+    suspend fun pause(manual: Boolean = true): Result<Unit> = runCatching {
+        if (manual) checkNotLocked()
         val uid = uid()
         workdays.pause(uid, System.currentTimeMillis())
         TrackingService.stop(context)
@@ -87,7 +95,8 @@ class TrackingController(
         publishStatus(uid, WorkStatus.ACTIVE, here = null)
     }
 
-    suspend fun endDay(): Result<Unit> = runCatching {
+    suspend fun endDay(manual: Boolean = true): Result<Unit> = runCatching {
+        if (manual) checkNotLocked()
         val uid = uid()
         val date = workdays.openWorkday(uid)?.date
         val here = currentNamedLocation(uid, timeoutMs = 6_000)

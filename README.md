@@ -14,6 +14,7 @@ you make reaches every affected phone within seconds.
   * Opening History repairs days recorded wrongly by older versions.
 * **Watchdog.** Every 15 minutes it checks that tracking is still running during an active day, restarts it if the phone
   (Xiaomi, Oppo, Vivo…) killed it, and alerts the employee after 30 minutes without GPS.
+* **Map styles** (Standard, Terrain, Dark) use free OpenStreetMap-based tiles with no API key.
 * **Interactive map.**
   * The route is coloured by speed (walk, city, fast), with dashed lines where the signal was lost.
   * Tap the line to see the time, speed and distance at that point.
@@ -28,8 +29,15 @@ you make reaches every affected phone within seconds.
   * **Automatic start and end:** phones start and end the workday at those times using exact alarms, and pick up changes within seconds.
   * **Late marking:** late and not-started badges on the Team list, a late mark on each day, a History calendar
     (worked / late / missed), and "Late (min)" columns in reports.
-  * **Requirements:** for automatic start, the employee must allow location "All the time". On Xiaomi phones,
-    also enable Autostart for the app.
+  * **Applies to everyone** in the company, admins included. To exempt someone, open their page, go to Work schedule,
+    turn Personal schedule on, and switch "Use a work schedule" off.
+  * **Lock tracking during working hours** (optional): staff can't pause or end between the start and end times,
+    and a paused day is resumed automatically.
+  * **Missed alarms are caught up.** Whenever the app opens, the schedule changes, or the 15-minute watchdog runs,
+    the day is started (inside working hours, if none was started today) or ended (after the end time).
+  * **Requirements:** Android only lets an app start location tracking by itself if location is allowed
+    **"All the time"**. The app asks for it with a required prompt. On Xiaomi, Redmi, POCO, Oppo, Realme and Vivo
+    phones, **Autostart** must also be turned on. The app shows a button that opens that setting.
 * **History.** A month calendar, start and end places on every row, and cloud and phone copies merged by whichever is newer.
 
 **After updating:** publish the new `firestore.rules`. Phones need it to record their device.

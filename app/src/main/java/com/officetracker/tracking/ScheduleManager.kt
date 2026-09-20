@@ -12,6 +12,7 @@ import com.officetracker.core.model.WorkSchedule
 import com.officetracker.core.util.Dates
 import com.officetracker.data.repo.AuthRepository
 import com.officetracker.data.repo.OrgRepository
+import com.officetracker.data.repo.WorkdayRepository
 
 /**
  * Sets exact alarms for the next automatic start and end of the workday. The effective schedule
@@ -32,6 +33,12 @@ class ScheduleManager(
         return profile.effectiveSchedule(company.settings.schedule)
     }
 
+    /** True when the schedule forbids pausing / ending right now. */
+    fun isLockedNow(): Boolean {
+        val s = effective() ?: return false
+        return s.enforce && s.isWithinHours(System.currentTimeMillis(), Dates.zone)
+    }
+
     fun canScheduleExact(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarms?.canScheduleExactAlarms() == true
 
@@ -46,6 +53,36 @@ class ScheduleManager(
     fun cancel() {
         alarms?.cancel(pending(ScheduleReceiver.ACTION_START))
         alarms?.cancel(pending(ScheduleReceiver.ACTION_END))
+    }
+
+    /**
+     * Makes the day match the schedule even if an alarm was missed (phone off, or the maker's
+     * battery manager blocked it): starts during working hours if no day exists yet today,
+     * and ends an open day after working hours. Called on app start, on every schedule change
+     * and by the 15-minute watchdog.
+     */
+    suspend fun catchUp(workdays: WorkdayRepository, tracking: TrackingController): String? {
+        val s = effective() ?: return null
+        val uid = auth.currentUid ?: return null
+        val now = System.currentTimeMillis()
+        val today = Dates.todayKey()
+        val open = workdays.openWorkday(uid)
+        val minute = java.time.LocalTime.now(Dates.zone).let { it.hour * 60 + it.minute }
+        return when {
+            // Past the end time (or a day left open from before): end it.
+            s.autoEnd && open != null && (open.date != today || (s.isWorkDay(Dates.today()) && minute >= s.endMinute)) -> {
+                tracking.endDay(manual = false).fold({ "ended" }, { null })
+            }
+            // Inside working hours, nothing recorded yet today: start.
+            s.autoStart && open == null && s.isWithinHours(now, Dates.zone) && !workdays.hasLocalDay(uid, today) -> {
+                tracking.startDay().fold({ "started" }, { it.message })
+            }
+            // Locked schedule: a paused day during working hours is resumed.
+            s.enforce && open?.status == com.officetracker.core.model.WorkStatus.PAUSED && s.isWithinHours(now, Dates.zone) -> {
+                tracking.resume().fold({ "resumed" }, { null })
+            }
+            else -> null
+        }
     }
 
     /** Next automatic start / end, for display. */

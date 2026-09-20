@@ -21,6 +21,8 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : CoroutineWork
         val c = OfficeTrackerApp.container
         if (!c.firebaseReady) return Result.success()
         val uid = c.auth.currentUid ?: return Result.success()
+        // Missed schedule alarms (phone off, battery manager) are caught up here.
+        runCatching { c.scheduler.catchUp(c.workdays, c.tracking) }
         val open = c.workdays.openWorkday(uid) ?: return Result.success()
         if (open.status != WorkStatus.ACTIVE) return Result.success()
         val planOk = c.org.currentCompany?.access(System.currentTimeMillis())?.usable ?: true

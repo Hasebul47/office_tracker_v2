@@ -63,12 +63,15 @@ class AppContainer(private val context: Context) {
     val uploader: CloudUploader by lazy { CloudUploader(db, firestore) }
     val namer: PlaceNamer by lazy { PlaceNamer(context, org, db.trackerDao()) }
     val tracking: TrackingController by lazy {
-        TrackingController(context, auth, workdays, org, locationClient, namer)
+        TrackingController(context, auth, workdays, org, locationClient, namer).also { t ->
+            t.scheduleLock = { scheduler.isLockedNow() }
+        }
     }
     val reports: ReportExporter by lazy { ReportExporter(context) }
     val updates: UpdateController by lazy { UpdateController(UpdateManager(context, store), appScope) }
 
     val scheduler: ScheduleManager by lazy { ScheduleManager(context, auth, org) }
+    private val catchUpLock = kotlinx.coroutines.sync.Mutex()
 
     fun newProcessor(uid: String) = TrackingProcessor(context, uid, db, org, namer, sync, locationClient)
 
@@ -132,6 +135,10 @@ class AppContainer(private val context: Context) {
                 if (profile.isSuperAdmin) return@collect
                 val company = (companyState as? CompanyState.Loaded)?.company ?: return@collect
                 scheduler.reschedule()
+                // Start / end now if the schedule says so and an alarm was missed.
+                if (catchUpLock.tryLock()) {
+                    try { scheduler.catchUp(workdays, tracking) } catch (_: Exception) { } finally { catchUpLock.unlock() }
+                }
                 if (auth.claimingDevice) return@collect
                 val active = profile.activeDeviceId
                 val mine = auth.deviceId()

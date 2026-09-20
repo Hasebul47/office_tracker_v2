@@ -21,6 +21,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.RestartAlt
+import com.officetracker.ui.components.autostartIntent
 import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CheckCircle
@@ -187,6 +189,13 @@ fun ProfileScreen(
                     HorizontalDivider()
                     CheckRow(Icons.Default.Notifications, "Notifications", "Shows tracking status", notifications) {
                         context.safeStart(context.appSettingsIntent())
+                    }
+                    val autostart = remember { context.autostartIntent() }
+                    if (autostart != null) {
+                        HorizontalDivider()
+                        CheckRow(Icons.Default.RestartAlt, "Autostart (${android.os.Build.MANUFACTURER})", "Turn ON so tracking and the schedule work when the app is closed", false) {
+                            context.safeStart(autostart)
+                        }
                     }
                     if (company.features.scheduler) {
                         HorizontalDivider()

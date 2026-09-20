@@ -21,6 +21,8 @@ data class WorkSchedule(
     val autoEnd: Boolean = true,
     /** Starting more than this many minutes after [startMinute] counts as late. */
     val lateAfterMinutes: Int = 15,
+    /** During working hours tracking cannot be paused or ended by the employee. */
+    val enforce: Boolean = false,
 ) {
     val startTime: LocalTime get() = LocalTime.of(startMinute / 60 % 24, startMinute % 60)
     val endTime: LocalTime get() = LocalTime.of(endMinute / 60 % 24, endMinute % 60)
@@ -72,6 +74,7 @@ data class WorkSchedule(
         "autoStart" to autoStart,
         "autoEnd" to autoEnd,
         "lateAfterMinutes" to lateAfterMinutes,
+        "enforce" to enforce,
     )
 
     fun daysLabel(): String {
@@ -94,6 +97,7 @@ data class WorkSchedule(
                 autoStart = m["autoStart"] as? Boolean ?: true,
                 autoEnd = m["autoEnd"] as? Boolean ?: true,
                 lateAfterMinutes = int("lateAfterMinutes")?.coerceIn(0, 240) ?: d.lateAfterMinutes,
+                enforce = m["enforce"] as? Boolean ?: false,
             )
         }
 
@@ -107,8 +111,8 @@ data class WorkSchedule(
 }
 
 /**
- * The schedule that applies to a person: their own (set by the admin), otherwise the company's
- * for employees. Administrators follow a schedule only if one is set for them personally.
+ * The schedule that applies to a person: their own (set by the admin), otherwise the company's.
+ * It applies to administrators too; a personal schedule that is switched off exempts someone.
  */
 fun UserProfile.effectiveSchedule(companySchedule: WorkSchedule): WorkSchedule? =
-    (schedule ?: if (role == Role.EMPLOYEE) companySchedule else null)?.takeIf { it.enabled }
+    if (role == Role.SUPER_ADMIN) null else (schedule ?: companySchedule).takeIf { it.enabled }
