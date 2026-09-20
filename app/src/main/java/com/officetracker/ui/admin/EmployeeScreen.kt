@@ -3,6 +3,7 @@
 package com.officetracker.ui.admin
 
 import android.content.Intent
+import com.officetracker.core.model.effectiveSchedule
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -55,6 +56,14 @@ import com.officetracker.AppContainer
 import com.officetracker.core.model.LiveState
 import com.officetracker.core.model.Role
 import com.officetracker.core.model.UserProfile
+import com.officetracker.core.model.WorkSchedule
+import com.officetracker.ui.components.ScheduleEditor
+import com.officetracker.ui.components.summary
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Switch
+import androidx.compose.material.icons.filled.PhonelinkErase
+import androidx.compose.material.icons.filled.Schedule
 import com.officetracker.core.util.Dates
 import com.officetracker.core.util.Phone
 import com.officetracker.ui.appViewModel
@@ -101,6 +110,20 @@ class EmployeeViewModel(private val c: AppContainer, private val uid: String) : 
         c.users.updateUser(before, name, department, role).onSuccess { onDone() }.onFailure { message = it.message }
     }
 
+    fun setSchedule(schedule: WorkSchedule?, onDone: () -> Unit) = launchBusy {
+        c.users.setSchedule(uid, schedule)
+            .onSuccess { message = if (schedule == null) "Now follows the company schedule." else "Personal schedule saved. Their phone updates within seconds."; onDone() }
+            .onFailure { message = it.message }
+    }
+
+    fun revokeDevice() = launchBusy {
+        c.users.revokeDevice(uid)
+            .onSuccess { message = "Signed out from their phone. They can sign in again on any phone." }
+            .onFailure { message = it.message }
+    }
+
+    val companySchedule = c.org.config
+
     fun setDisabled(disabled: Boolean) = launchBusy {
         c.users.setDisabled(uid, disabled)
             .onSuccess { message = if (disabled) "Account deactivated. They are signed out on their next sync." else "Account re-activated." }
@@ -117,7 +140,10 @@ class EmployeeViewModel(private val c: AppContainer, private val uid: String) : 
         c.cloudDays.fetchWorkdays(uid, from, to)
             .onSuccess { days ->
                 val visits = days.associate { it.date to c.cloudDays.fetchStayCount(uid, it.date) }
-                val file = c.reports.monthReport(profile, month, days, visits, c.org.config.value.ratePerKm)
+                val file = c.reports.monthReport(
+                    profile, month, days, visits, c.org.config.value.ratePerKm,
+                    profile.effectiveSchedule(c.org.config.value.schedule),
+                )
                 onReady(c.reports.shareIntent(file, "${profile.name} · ${Dates.month(month)}"))
             }
             .onFailure { message = it.message }
@@ -148,6 +174,10 @@ fun EmployeeScreen(viewer: UserProfile, uid: String, onBack: () -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmDisable by remember { mutableStateOf(false) }
     var reporting by remember { mutableStateOf(false) }
+    var editingSchedule by remember { mutableStateOf(false) }
+    var confirmRevoke by remember { mutableStateOf(false) }
+    val companySchedule by vm.companySchedule.collectAsStateWithLifecycle()
+    val daySchedule by dayVm.schedule.collectAsStateWithLifecycle()
 
     val p = profile
     Scaffold(
@@ -164,6 +194,12 @@ fun EmployeeScreen(viewer: UserProfile, uid: String, onBack: () -> Unit) {
                             IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More") }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                 DropdownMenuItem(text = { Text("Edit details") }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { menu = false; editing = true })
+                                if (viewer.isSuperAdmin || features.scheduler) {
+                                    DropdownMenuItem(text = { Text("Work schedule") }, leadingIcon = { Icon(Icons.Default.Schedule, null) }, onClick = { menu = false; editingSchedule = true })
+                                }
+                                if (p.uid != viewer.uid && p.activeDeviceId != null) {
+                                    DropdownMenuItem(text = { Text("Sign out from phone") }, leadingIcon = { Icon(Icons.Default.PhonelinkErase, null) }, onClick = { menu = false; confirmRevoke = true })
+                                }
                                 if (p.uid != viewer.uid) {
                                     DropdownMenuItem(
                                         text = { Text(if (p.disabled) "Re-activate" else "Deactivate") },
@@ -201,6 +237,16 @@ fun EmployeeScreen(viewer: UserProfile, uid: String, onBack: () -> Unit) {
                                 "${Phone.pretty(p.phone)} · ${if (p.isAdmin) "Administrator" else "Employee"}",
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            p.activeDeviceName?.takeIf { p.activeDeviceId?.startsWith("revoked") == false }?.let { device ->
+                                Text(
+                                    "Phone: $device" + (p.activeSince?.let { " · since ${Dates.shortDay(Dates.keyOf(it))}" } ?: ""),
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text(
+                                "Schedule: " + ((p.schedule ?: companySchedule.schedule).summary()) + if (p.schedule != null) " (personal)" else "",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                             live?.let { l ->
                                 Text(
                                     "Last update ${Dates.ago(l.updatedAt, now)}" + (l.batteryPercent?.let { " · battery $it%" } ?: "") +
@@ -218,7 +264,7 @@ fun EmployeeScreen(viewer: UserProfile, uid: String, onBack: () -> Unit) {
                     }
                 }
             }
-            dayContent(state = day, onShift = dayVm::shift, onPick = dayVm::setDate, onRelabel = null)
+            dayContent(state = day, onShift = dayVm::shift, onPick = dayVm::setDate, onRelabel = null, schedule = daySchedule)
             item { Spacer(Modifier.height(24.dp)) }
         }
     }
@@ -239,6 +285,44 @@ fun EmployeeScreen(viewer: UserProfile, uid: String, onBack: () -> Unit) {
             "Delete ${p.name}?",
             "The profile is removed and they can no longer sign in. Their tracked history stays in the cloud for your records. To reuse the phone number later, also delete the login in Firebase Console > Authentication.",
             "Delete", onConfirm = { vm.delete(onBack) }, onDismiss = { confirmDelete = false }, destructive = true,
+        )
+    }
+    if (editingSchedule && p != null) {
+        var personal by remember { mutableStateOf(p.schedule != null) }
+        var draft by remember { mutableStateOf(p.schedule ?: companySchedule.schedule.copy(enabled = true)) }
+        AlertDialog(
+            onDismissRequest = { editingSchedule = false },
+            title = { Text("Work schedule · ${p.name}") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Personal schedule", modifier = Modifier.weight(1f))
+                        Switch(checked = personal, onCheckedChange = { personal = it })
+                    }
+                    if (personal) {
+                        ScheduleEditor(draft) { draft = it }
+                    } else {
+                        Text(
+                            "Follows the company schedule: ${companySchedule.schedule.summary()}",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !vm.busy && (!personal || !draft.enabled || draft.endMinute > draft.startMinute),
+                    onClick = { vm.setSchedule(if (personal) draft else null) { editingSchedule = false } },
+                ) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editingSchedule = false }) { Text("Cancel") } },
+        )
+    }
+    if (confirmRevoke && p != null) {
+        ConfirmDialog(
+            "Sign ${p.name} out?",
+            "Their phone (${p.activeDeviceName ?: "current phone"}) is signed out within seconds and any active workday is paused. They can sign in again.",
+            "Sign out", onConfirm = { vm.revokeDevice() }, onDismiss = { confirmRevoke = false },
         )
     }
     if (reporting && p != null) {

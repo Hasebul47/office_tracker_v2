@@ -7,13 +7,15 @@ import com.officetracker.core.model.DayDetail
 import com.officetracker.core.model.Timeline
 import com.officetracker.core.model.TimelineEntry
 import com.officetracker.core.model.UserProfile
+import com.officetracker.core.model.effectiveDistance
+import com.officetracker.core.model.WorkSchedule
 import com.officetracker.core.model.Workday
 import com.officetracker.core.util.Dates
 import com.officetracker.core.util.Format
 import java.io.File
 import java.time.YearMonth
 
-data class TeamReportRow(val profile: UserProfile, val workdays: List<Workday>)
+data class TeamReportRow(val profile: UserProfile, val workdays: List<Workday>, val schedule: WorkSchedule? = null)
 
 /** CSV reports (open in Excel / Google Sheets) shared through the Android share sheet. */
 class ReportExporter(private val context: Context) {
@@ -31,8 +33,9 @@ class ReportExporter(private val context: Context) {
                 add(listOf("Ended", day.endedAt?.let { Dates.time(it) } ?: "(open)", day.endName.orEmpty()))
                 add(listOf("Time on duty", Dates.duration(day.activeMillis(now))))
                 add(listOf("Paused", "${day.pauseCount} times", Dates.duration(day.pausedMillis)))
-                add(listOf("Distance (km)", Format.km(day.distanceMeters)))
-                add(listOf("Travel allowance (BDT)", Format.takaPlain(Format.allowance(day.distanceMeters, ratePerKm))))
+                val meters = detail.effectiveDistance()
+                add(listOf("Distance (km)", Format.km(meters)))
+                add(listOf("Travel allowance (BDT)", Format.takaPlain(Format.allowance(meters, ratePerKm))))
                 if (day.mockCount > 0) add(listOf("WARNING", "${day.mockCount} fake-GPS fixes detected"))
             }
             add(emptyList())
@@ -62,12 +65,20 @@ class ReportExporter(private val context: Context) {
         return write("day-${safe(profile.name)}-$date.csv", rows)
     }
 
-    fun monthReport(profile: UserProfile, month: YearMonth, workdays: List<Workday>, stayCounts: Map<String, Int>, ratePerKm: Double): File {
+    fun monthReport(
+        profile: UserProfile,
+        month: YearMonth,
+        workdays: List<Workday>,
+        stayCounts: Map<String, Int>,
+        ratePerKm: Double,
+        schedule: WorkSchedule? = null,
+    ): File {
+        val sched = schedule?.takeIf { it.enabled }
         val now = System.currentTimeMillis()
         val rows = buildList<List<String>> {
             add(listOf("Employee", profile.name, "Phone", profile.phone, "Month", Dates.month(month)))
             add(emptyList())
-            add(listOf("Date", "Start", "End", "Start place", "End place", "Hours on duty", "Visits", "Distance (km)", "Allowance (BDT)"))
+            add(listOf("Date", "Start", "End", "Start place", "End place", "Hours on duty", "Visits", "Distance (km)", "Allowance (BDT)", "Late (min)"))
             var totalMs = 0L
             var totalM = 0.0
             for (d in workdays.sortedBy { it.date }) {
@@ -80,6 +91,7 @@ class ReportExporter(private val context: Context) {
                         d.startName.orEmpty(), d.endName.orEmpty(), "%.2f".format(active / 3_600_000.0),
                         (stayCounts[d.date] ?: 0).toString(), Format.km(d.distanceMeters),
                         Format.takaPlain(Format.allowance(d.distanceMeters, ratePerKm)),
+                        (sched?.lateMinutes(d.startedAt, Dates.zone) ?: 0).toString(),
                     )
                 )
             }
@@ -98,20 +110,21 @@ class ReportExporter(private val context: Context) {
         val rows = buildList<List<String>> {
             add(listOf("Team report", Dates.month(month), "Rate per km (BDT)", Format.takaPlain(ratePerKm)))
             add(emptyList())
-            add(listOf("Employee", "Phone", "Department", "Days worked", "Hours on duty", "Distance (km)", "Allowance (BDT)", "Fake-GPS fixes"))
+            add(listOf("Employee", "Phone", "Department", "Days worked", "Days late", "Hours on duty", "Distance (km)", "Allowance (BDT)", "Fake-GPS fixes"))
             for (r in team.sortedBy { it.profile.name.lowercase() }) {
                 val hours = r.workdays.sumOf { it.activeMillis(now) } / 3_600_000.0
                 val meters = r.workdays.sumOf { it.distanceMeters }
                 add(
                     listOf(
                         r.profile.name, r.profile.phone, r.profile.department, r.workdays.size.toString(),
+                        r.workdays.count { d -> (r.schedule?.takeIf { it.enabled }?.lateMinutes(d.startedAt, Dates.zone) ?: 0) > 0 }.toString(),
                         "%.2f".format(hours), Format.km(meters), Format.takaPlain(Format.allowance(meters, ratePerKm)),
                         r.workdays.sumOf { it.mockCount }.toString(),
                     )
                 )
             }
             add(emptyList())
-            add(listOf("Employee", "Date", "Start", "End", "Hours on duty", "Distance (km)", "Allowance (BDT)"))
+            add(listOf("Employee", "Date", "Start", "End", "Hours on duty", "Distance (km)", "Allowance (BDT)", "Late (min)"))
             for (r in team.sortedBy { it.profile.name.lowercase() }) {
                 for (d in r.workdays.sortedBy { it.date }) {
                     add(
@@ -119,6 +132,7 @@ class ReportExporter(private val context: Context) {
                             r.profile.name, d.date, Dates.time(d.startedAt), d.endedAt?.let { Dates.time(it) } ?: "(open)",
                             "%.2f".format(d.activeMillis(now) / 3_600_000.0), Format.km(d.distanceMeters),
                             Format.takaPlain(Format.allowance(d.distanceMeters, ratePerKm)),
+                            (r.schedule?.takeIf { it.enabled }?.lateMinutes(d.startedAt, Dates.zone) ?: 0).toString(),
                         )
                     )
                 }

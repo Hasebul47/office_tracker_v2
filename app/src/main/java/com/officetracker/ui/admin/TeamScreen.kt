@@ -3,6 +3,7 @@
 package com.officetracker.ui.admin
 
 import androidx.compose.foundation.clickable
+import com.officetracker.core.model.effectiveSchedule
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,6 +68,7 @@ import com.officetracker.core.model.Company
 import com.officetracker.core.model.LiveState
 import com.officetracker.core.model.Role
 import com.officetracker.core.model.UserProfile
+import com.officetracker.core.model.WorkSchedule
 import com.officetracker.core.model.WorkStatus
 import com.officetracker.core.util.Dates
 import com.officetracker.core.util.Format
@@ -140,7 +142,12 @@ class TeamViewModel(private val c: AppContainer, private val companyId: String) 
             try {
                 val (from, to) = Dates.monthRange(month)
                 val rows = members.value.filter { !it.profile.disabled }.map { m ->
-                    async { TeamReportRow(m.profile, c.cloudDays.fetchWorkdays(m.profile.uid, from, to).getOrDefault(emptyList())) }
+                    async {
+                        TeamReportRow(
+                            m.profile, c.cloudDays.fetchWorkdays(m.profile.uid, from, to).getOrDefault(emptyList()),
+                            m.profile.effectiveSchedule(c.org.config.value.schedule),
+                        )
+                    }
                 }.awaitAll()
                 val file = c.reports.teamReport(month, rows, c.org.config.value.ratePerKm)
                 onReady(c.reports.shareIntent(file, "Team report ${Dates.month(month)}"))
@@ -225,6 +232,7 @@ fun TeamScreen(company: Company, onOpenEmployee: (String) -> Unit) {
                     },
                     now = now, query = query, onQuery = { query = it }, filter = filter, onFilter = { filter = it },
                     onOpen = onOpenEmployee, showFakeGps = features.fakeGpsAlerts,
+                    schedule = company.settings.schedule.takeIf { features.scheduler },
                 )
             }
         }
@@ -299,6 +307,7 @@ private fun PeopleList(
     onFilter: (TeamFilter) -> Unit,
     onOpen: (String) -> Unit,
     showFakeGps: Boolean,
+    schedule: WorkSchedule?,
 ) {
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
@@ -321,13 +330,19 @@ private fun PeopleList(
         if (members.isEmpty()) item {
             EmptyState(Icons.Default.Groups, "No one here", "Try another filter, or add an employee.")
         }
-        items(members, key = { it.profile.uid }) { m -> MemberCard(m, now, showFakeGps) { onOpen(m.profile.uid) } }
+        items(members, key = { it.profile.uid }) { m -> MemberCard(m, now, showFakeGps, schedule) { onOpen(m.profile.uid) } }
     }
 }
 
 @Composable
-private fun MemberCard(m: TeamMember, now: Long, showFakeGps: Boolean, onClick: () -> Unit) {
+private fun MemberCard(m: TeamMember, now: Long, showFakeGps: Boolean, schedule: WorkSchedule?, onClick: () -> Unit) {
     val l = m.live
+    val personal = schedule?.let { m.profile.effectiveSchedule(it) }
+    val startedToday = l?.dayStartedAt?.takeIf { Dates.keyOf(it) == Dates.todayKey() }
+    val late = if (personal != null && startedToday != null) personal.lateMinutes(startedToday, Dates.zone) else 0
+    val notStarted = personal != null && startedToday == null && !m.profile.disabled &&
+        personal.isWorkDay(Dates.today()) &&
+        java.time.LocalTime.now().let { it.hour * 60 + it.minute } > personal.startMinute + personal.lateAfterMinutes
     val color = if (m.profile.disabled) Brand.Muted else l.statusColor(now)
     SectionCard(Modifier.clickable(onClick = onClick), padding = PaddingValues(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -337,6 +352,8 @@ private fun MemberCard(m: TeamMember, now: Long, showFakeGps: Boolean, onClick: 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(m.profile.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     if (m.profile.isAdmin) Text("  Admin", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    if (late > 0) Text("  Late ${Dates.duration(late * 60_000L)}", style = MaterialTheme.typography.labelSmall, color = Brand.Warning)
+                    if (notStarted) Text("  Not started", style = MaterialTheme.typography.labelSmall, color = Brand.Danger)
                 }
                 Text(
                     listOfNotNull(

@@ -17,6 +17,7 @@ import com.officetracker.core.model.RoutePoint
 import com.officetracker.core.model.Stay
 import com.officetracker.core.model.UserProfile
 import com.officetracker.core.model.WorkStatus
+import com.officetracker.core.model.WorkSchedule
 import com.officetracker.core.model.Workday
 
 /** Firestore layout (see firestore.rules):
@@ -68,6 +69,10 @@ object Mappers {
         disabled = doc.getBoolean("disabled") ?: false,
         createdAt = doc.long("createdAt") ?: 0L,
         companyId = doc.getString("companyId"),
+        activeDeviceId = doc.getString("activeDeviceId"),
+        activeDeviceName = doc.getString("activeDeviceName"),
+        activeSince = doc.long("activeSince"),
+        schedule = WorkSchedule.fromMap(doc.get("schedule") as? Map<*, *>),
     )
 
     fun profileMap(p: UserProfile): Map<String, Any?> = mapOf(
@@ -112,6 +117,7 @@ object Mappers {
             stayRadiusMeters = num("stayRadiusMeters")?.toDouble() ?: d.stayRadiusMeters,
             minStayMinutes = num("minStayMinutes")?.toInt() ?: d.minStayMinutes,
             maxAccuracyMeters = num("maxAccuracyMeters")?.toDouble() ?: d.maxAccuracyMeters,
+            schedule = WorkSchedule.fromMap(m["schedule"] as? Map<*, *>) ?: d.schedule,
         )
     }
 
@@ -120,6 +126,7 @@ object Mappers {
         "stayRadiusMeters" to c.stayRadiusMeters,
         "minStayMinutes" to c.minStayMinutes,
         "maxAccuracyMeters" to c.maxAccuracyMeters,
+        "schedule" to c.schedule.toMap(),
     )
 
     fun live(doc: DocumentSnapshot): LiveState = LiveState(
@@ -136,6 +143,7 @@ object Mappers {
         distanceMeters = doc.double("distanceMeters") ?: 0.0,
         appVersion = doc.getString("appVersion"),
         updatedAt = doc.long("updatedAt") ?: 0L,
+        dayStartedAt = doc.long("dayStartedAt"),
     )
 
     fun liveMap(s: LiveState): Map<String, Any?> = mapOf(
@@ -151,7 +159,9 @@ object Mappers {
         "distanceMeters" to s.distanceMeters,
         "appVersion" to s.appVersion,
         "updatedAt" to s.updatedAt,
-    )
+    ) + (s.dayStartedAt?.let { mapOf("dayStartedAt" to it) } ?: emptyMap())
+    // dayStartedAt is only written when known, so a status-only update (pause / end) merged
+    // into live/{uid} does not erase the start time the admin's late / "not started" marks use.
 
     fun workday(uid: String, doc: DocumentSnapshot): Workday? {
         if (!doc.exists()) return null
@@ -173,6 +183,7 @@ object Mappers {
             pauseCount = doc.int("pauseCount") ?: 0,
             pointCount = doc.int("pointCount") ?: 0,
             mockCount = doc.int("mockCount") ?: 0,
+            updatedAt = doc.long("updatedAt") ?: 0L,
         )
     }
 

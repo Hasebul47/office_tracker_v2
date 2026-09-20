@@ -9,6 +9,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.officetracker.BuildConfig
 import com.officetracker.core.model.Role
 import com.officetracker.core.model.UserProfile
+import com.officetracker.core.model.WorkSchedule
 import com.officetracker.core.util.Phone
 import com.officetracker.data.remote.Mappers
 import com.officetracker.data.remote.Paths
@@ -143,6 +144,18 @@ class UserRepository(
         Unit
     }.mapError()
 
+    /** Signs the person out of whatever phone they are using (they can sign in again). */
+    suspend fun revokeDevice(uid: String): Result<Unit> = runCatching {
+        Paths.user(db, uid).update("activeDeviceId", "$REVOKED_PREFIX${System.currentTimeMillis()}").await()
+        Unit
+    }.mapError()
+
+    /** Admin-set personal schedule; null returns the person to the company schedule. */
+    suspend fun setSchedule(uid: String, schedule: WorkSchedule?): Result<Unit> = runCatching {
+        Paths.user(db, uid).update("schedule", schedule?.toMap() ?: FieldValue.delete()).await()
+        Unit
+    }.mapError()
+
     suspend fun setDisabled(uid: String, disabled: Boolean): Result<Unit> = runCatching {
         Paths.user(db, uid).update("disabled", disabled).await()
         Unit
@@ -220,6 +233,10 @@ class UserRepository(
                 "updatedAt" to System.currentTimeMillis(),
             )
         ).await()
+    }
+
+    companion object {
+        const val REVOKED_PREFIX = "revoked:"
     }
 
     private fun counterUpdate(userDelta: Int, adminDelta: Int): Map<String, Any> = buildMap {

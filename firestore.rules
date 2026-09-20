@@ -120,9 +120,9 @@ service cloud.firestore {
                      == company(resource.data.companyId).adminCount
                         + (request.resource.data.role == 'ADMIN' ? 1 : -1)))
         || (isAdminOf(resource.data.get('companyId', '')) && uid == request.auth.uid
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'department', 'lastLoginAt', 'appVersion']))
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'department', 'lastLoginAt', 'appVersion', 'activeDeviceId', 'activeDeviceName', 'activeSince', 'schedule']))
         || (isSelf(uid) && isActiveUser()
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLoginAt', 'appVersion']));
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLoginAt', 'appVersion', 'activeDeviceId', 'activeDeviceName', 'activeSince']));
 
       allow delete: if isSuper()
         || (isAdminOf(resource.data.get('companyId', '')) && uid != request.auth.uid);

@@ -5,6 +5,35 @@ start their workday, the phone records their route and visits, company admins ma
 and **you, the platform owner (super admin)**, manage companies, plans and subscriptions. Any change
 you make reaches every affected phone within seconds.
 
+## New in 2.1
+
+* **Tracking fixes.**
+  * Distance is re-measured from the stored GPS route when a day ends, so it can no longer show 0 m for a real trip.
+  * Start and end always appear on the map: if the phone had no fix at that moment, the first or last GPS point is used.
+  * A day left open is closed at its last recorded point, not with a 6-second duration.
+  * Opening History repairs days recorded wrongly by older versions.
+* **Watchdog.** Every 15 minutes it checks that tracking is still running during an active day, restarts it if the phone
+  (Xiaomi, Oppo, Vivo…) killed it, and alerts the employee after 30 minutes without GPS.
+* **Interactive map.**
+  * The route is coloured by speed (walk, city, fast), with dashed lines where the signal was lost.
+  * Tap the line to see the time, speed and distance at that point.
+  * Full-screen playback with a slider and 2x, 8x and 32x speeds.
+  * Zoom and fit buttons, and Standard, Light and Dark map styles.
+* **One device per account.** The super admin switches it per company (Features > "One device per account").
+  Signing in on a new phone signs the old one out: its day is paused and its data uploaded first.
+  Admins can also sign a person out remotely from their page.
+* **Work schedule with automatic start and end.**
+  * **Company schedule:** the admin sets it in Profile > Company work schedule (days, start and end times, late-after minutes).
+  * **Personal override:** set from the employee's page, under ⋮ > Work schedule.
+  * **Automatic start and end:** phones start and end the workday at those times using exact alarms, and pick up changes within seconds.
+  * **Late marking:** late and not-started badges on the Team list, a late mark on each day, a History calendar
+    (worked / late / missed), and "Late (min)" columns in reports.
+  * **Requirements:** for automatic start, the employee must allow location "All the time". On Xiaomi phones,
+    also enable Autostart for the app.
+* **History.** A month calendar, start and end places on every row, and cloud and phone copies merged by whichever is newer.
+
+**After updating:** publish the new `firestore.rules`. Phones need it to record their device.
+
 ## Roles
 
 | Role | Created by | Can do |

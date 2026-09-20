@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface Session {
     data object Loading : Session
@@ -108,6 +109,36 @@ class AuthRepository(
         }
     }
 
+    /** True between signing in and recording this phone as the account's active device. */
+    @Volatile var claimingDevice = false
+        private set
+
+    /** Records this phone as the one allowed to use the account (single-device login). */
+    suspend fun claimDevice(uid: String) {
+        claimingDevice = true
+        try {
+            withTimeoutOrNull(8_000) {
+                Paths.user(db, uid).update(
+                    mapOf(
+                        "activeDeviceId" to store.deviceId(),
+                    "activeDeviceName" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim(),
+                    "activeSince" to System.currentTimeMillis(),
+                    "lastLoginAt" to System.currentTimeMillis(),
+                        "appVersion" to BuildConfig.VERSION_NAME,
+                    )
+                ).await()
+            }
+        } catch (_: Exception) {
+            // Offline: Firestore queues the write; enforcement waits for the snapshot.
+        } finally {
+            claimingDevice = false
+        }
+    }
+
+    suspend fun deviceId(): String = store.deviceId()
+
+    fun signOutWithMessage(message: String) = forceSignOut(message)
+
     private fun forceSignOut(message: String) {
         pendingSignOutMessage = message
         scope.launch { store.clearProfile() }
@@ -118,12 +149,15 @@ class AuthRepository(
         require(Phone.isValid(phone)) { "Enter a valid 11-digit mobile number." }
         require(password.isNotEmpty()) { "Enter your password." }
         val email = Phone.toAuthEmail(phone, BuildConfig.AUTH_EMAIL_DOMAIN)
-        val result = auth.signInWithEmailAndPassword(email, password).await()
-        val uid = result.user?.uid ?: error("Sign-in failed.")
-        // Best effort: rules only allow these two fields to be changed by the user.
-        Paths.user(db, uid).update(
-            mapOf("lastLoginAt" to System.currentTimeMillis(), "appVersion" to BuildConfig.VERSION_NAME)
-        )
+        claimingDevice = true
+        try {
+            val result = auth.signInWithEmailAndPassword(email, password).await()
+            val uid = result.user?.uid ?: error("Sign-in failed.")
+            // Signing in here makes this the account's active phone; any other phone is signed out.
+            claimDevice(uid)
+        } finally {
+            claimingDevice = false
+        }
         Unit
     }.mapError()
 

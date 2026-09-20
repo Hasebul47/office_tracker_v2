@@ -22,6 +22,12 @@ data class UserProfile(
     val createdAt: Long,
     /** Tenant this person belongs to; null only for the super admin. */
     val companyId: String? = null,
+    /** The one device currently allowed to use this account (single-device login). */
+    val activeDeviceId: String? = null,
+    val activeDeviceName: String? = null,
+    val activeSince: Long? = null,
+    /** Personal work schedule; null means the company schedule applies. */
+    val schedule: WorkSchedule? = null,
 ) {
     val isAdmin: Boolean get() = role == Role.ADMIN
     val isSuperAdmin: Boolean get() = role == Role.SUPER_ADMIN
@@ -71,6 +77,7 @@ data class AppConfig(
     val stayRadiusMeters: Double = 80.0,
     val minStayMinutes: Int = 5,
     val maxAccuracyMeters: Double = 50.0,
+    val schedule: WorkSchedule = WorkSchedule(),
 )
 
 /** Latest position and device health of one employee (Firestore live/{uid}). */
@@ -88,6 +95,7 @@ data class LiveState(
     val distanceMeters: Double,
     val appVersion: String?,
     val updatedAt: Long,
+    val dayStartedAt: Long? = null,
 ) {
     fun isStale(now: Long): Boolean = status.isOnDuty && now - updatedAt > STALE_AFTER_MS
 
@@ -114,6 +122,7 @@ data class Workday(
     val pauseCount: Int,
     val pointCount: Int,
     val mockCount: Int,
+    val updatedAt: Long = 0L,
 ) {
     /** Time on duty, excluding pauses. */
     fun activeMillis(now: Long): Long {

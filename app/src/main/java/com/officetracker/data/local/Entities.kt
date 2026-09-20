@@ -41,7 +41,7 @@ data class WorkdayEntity(
         startName = startName, startLatitude = startLat, startLongitude = startLng,
         endName = endName, endLatitude = endLat, endLongitude = endLng,
         distanceMeters = distanceMeters, pausedMillis = pausedMillis, pausedAt = pausedAt,
-        pauseCount = pauseCount, pointCount = pointCount, mockCount = mockCount,
+        pauseCount = pauseCount, pointCount = pointCount, mockCount = mockCount, updatedAt = updatedAt,
     )
 }
 

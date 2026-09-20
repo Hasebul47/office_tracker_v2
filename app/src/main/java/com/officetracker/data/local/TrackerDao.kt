@@ -42,6 +42,18 @@ interface TrackerDao {
     @Query("UPDATE workdays SET dirty = 0 WHERE userId = :userId AND date = :date AND updatedAt = :updatedAt")
     suspend fun markWorkdaySynced(userId: String, date: String, updatedAt: Long)
 
+    @Query(
+        """UPDATE workdays SET startLat = :lat, startLng = :lng, startName = COALESCE(startName, :name), updatedAt = :now, dirty = 1
+           WHERE userId = :userId AND date = :date AND startLat IS NULL"""
+    )
+    suspend fun fillStart(userId: String, date: String, lat: Double, lng: Double, name: String?, now: Long)
+
+    @Query("UPDATE workdays SET startName = :name, updatedAt = :now, dirty = 1 WHERE userId = :userId AND date = :date AND startName IS NULL")
+    suspend fun fillStartName(userId: String, date: String, name: String, now: Long)
+
+    @Query("UPDATE workdays SET endName = :name, updatedAt = :now, dirty = 1 WHERE userId = :userId AND date = :date AND endName IS NULL")
+    suspend fun fillEndName(userId: String, date: String, name: String, now: Long)
+
     // ---- Stays ----
     @Upsert
     suspend fun upsertStay(stay: StayEntity)
@@ -87,6 +99,9 @@ interface TrackerDao {
 
     @Query("SELECT * FROM track_points WHERE userId = :userId AND date = :date ORDER BY time ASC")
     suspend fun getPoints(userId: String, date: String): List<TrackPointEntity>
+
+    @Query("SELECT * FROM track_points WHERE userId = :userId AND date = :date ORDER BY time DESC LIMIT 1")
+    suspend fun lastPoint(userId: String, date: String): TrackPointEntity?
 
     @Query("SELECT * FROM track_points WHERE userId = :userId AND synced = 0 ORDER BY date ASC, time ASC LIMIT :limit")
     suspend fun unsyncedPoints(userId: String, limit: Int): List<TrackPointEntity>

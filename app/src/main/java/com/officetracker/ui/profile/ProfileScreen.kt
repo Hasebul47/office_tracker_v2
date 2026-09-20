@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CheckCircle
@@ -59,6 +60,12 @@ import com.officetracker.AppContainer
 import com.officetracker.BuildConfig
 import com.officetracker.core.model.AppConfig
 import com.officetracker.core.model.Company
+import com.officetracker.core.model.WorkSchedule
+import com.officetracker.core.util.Dates
+import com.officetracker.OfficeTrackerApp
+import com.officetracker.ui.components.ScheduleEditor
+import com.officetracker.ui.components.exactAlarmSettingsIntent
+import com.officetracker.ui.components.summary
 import com.officetracker.core.model.UserProfile
 import com.officetracker.core.util.Phone
 import com.officetracker.ui.appViewModel
@@ -137,6 +144,7 @@ fun ProfileScreen(
     val background = remember(tick) { context.hasBackgroundLocation() }
     val battery = remember(tick) { context.isIgnoringBatteryOptimizations() }
     val notifications = remember(tick) { context.hasNotificationPermission() }
+    val exactAlarms = remember(tick) { OfficeTrackerApp.container.scheduler.canScheduleExact() }
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(title = { Text("Profile") })
@@ -180,6 +188,28 @@ fun ProfileScreen(
                     CheckRow(Icons.Default.Notifications, "Notifications", "Shows tracking status", notifications) {
                         context.safeStart(context.appSettingsIntent())
                     }
+                    if (company.features.scheduler) {
+                        HorizontalDivider()
+                        CheckRow(Icons.Default.Alarm, "Exact alarms", "Starts and ends your day on time", exactAlarms) {
+                            context.safeStart(context.exactAlarmSettingsIntent())
+                        }
+                    }
+                }
+            }
+
+            if (company.features.scheduler) {
+                val mySchedule = profile.schedule ?: if (!profile.isAdmin) config.schedule else null
+                SectionTitle("My work schedule")
+                SectionCard {
+                    Column {
+                        Text(mySchedule?.summary() ?: "No schedule", style = MaterialTheme.typography.bodyMedium)
+                        val (nextStart, nextEnd) = remember(tick, mySchedule) { OfficeTrackerApp.container.scheduler.upcoming() }
+                        if (nextStart != null) InfoRow("Next automatic start", Dates.friendlyDay(Dates.keyOf(nextStart)) + " " + Dates.time(nextStart))
+                        if (nextEnd != null) InfoRow("Next automatic end", Dates.friendlyDay(Dates.keyOf(nextEnd)) + " " + Dates.time(nextEnd))
+                        if (profile.schedule != null) {
+                            Text("Set personally by your administrator.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
             }
 
@@ -189,6 +219,10 @@ fun ProfileScreen(
             if (profile.isAdmin) {
                 SectionTitle("Organisation settings")
                 OrgSettingsCard(config, vm.busy, showAllowance = company.features.allowance, onSave = vm::saveConfig)
+                if (company.features.scheduler) {
+                    SectionTitle("Company work schedule")
+                    CompanyScheduleCard(config, vm.busy) { vm.saveConfig(config.copy(schedule = it)) }
+                }
             }
 
             SectionTitle("App")
@@ -263,6 +297,25 @@ private fun CheckRow(icon: ImageVector, title: String, subtitle: String, ok: Boo
 }
 
 @Composable
+private fun CompanyScheduleCard(config: AppConfig, busy: Boolean, onSave: (WorkSchedule) -> Unit) {
+    var draft by remember(config.schedule) { mutableStateOf(config.schedule) }
+    SectionCard {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "Applies to all employees unless you set a personal schedule on their page. Phones pick up changes within seconds.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            ScheduleEditor(draft) { draft = it }
+            LoadingButton(
+                text = "Save schedule", loading = busy, modifier = Modifier.fillMaxWidth(),
+                enabled = draft != config.schedule && (!draft.enabled || draft.endMinute > draft.startMinute),
+                onClick = { onSave(draft) },
+            )
+        }
+    }
+}
+
+@Composable
 private fun OrgSettingsCard(config: AppConfig, busy: Boolean, showAllowance: Boolean, onSave: (AppConfig) -> Unit) {
     var rate by remember(config) { mutableStateOf(config.ratePerKm.toString()) }
     var radius by remember(config) { mutableStateOf(config.stayRadiusMeters.toInt().toString()) }
@@ -285,7 +338,8 @@ private fun OrgSettingsCard(config: AppConfig, busy: Boolean, showAllowance: Boo
                 text = "Save settings", loading = busy, modifier = Modifier.fillMaxWidth(),
                 onClick = {
                     onSave(
-                        AppConfig(
+                        // copy(): keep fields edited elsewhere, such as the work schedule.
+                        config.copy(
                             ratePerKm = rate.toDoubleOrNull() ?: config.ratePerKm,
                             stayRadiusMeters = radius.toDoubleOrNull() ?: config.stayRadiusMeters,
                             minStayMinutes = minutes.toIntOrNull() ?: config.minStayMinutes,

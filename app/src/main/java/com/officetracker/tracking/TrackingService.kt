@@ -55,6 +55,7 @@ class TrackingService : LifecycleService() {
     private fun startTracking() {
         if (!promoteToForeground(buildNotification(null))) return
         if (trackingJob?.isActive == true) return
+        running = true
 
         val container = OfficeTrackerApp.container
         val uid = container.auth.currentUid
@@ -97,6 +98,11 @@ class TrackingService : LifecycleService() {
         }
     }
 
+    override fun onDestroy() {
+        running = false
+        super.onDestroy()
+    }
+
     private fun promoteToForeground(notification: Notification): Boolean = try {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
@@ -110,6 +116,7 @@ class TrackingService : LifecycleService() {
     }
 
     private fun stopTracking() {
+        running = false
         trackingJob?.cancel()
         trackingJob = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -163,12 +170,17 @@ class TrackingService : LifecycleService() {
         private const val ACTION_PAUSE = "com.officetracker.action.PAUSE"
         private const val ACTION_STOP = "com.officetracker.action.STOP"
 
-        fun start(context: Context) {
-            try {
-                ContextCompat.startForegroundService(context, Intent(context, TrackingService::class.java))
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not start tracking service", e)
-            }
+        /** True while GPS tracking is running in this process. */
+        @Volatile var running = false
+            private set
+
+        /** Returns false when Android refused to start it (e.g. from the background). */
+        fun start(context: Context): Boolean = try {
+            ContextCompat.startForegroundService(context, Intent(context, TrackingService::class.java))
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not start tracking service", e)
+            false
         }
 
         fun stop(context: Context) {

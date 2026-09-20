@@ -3,6 +3,7 @@
 package com.officetracker.ui.today
 
 import androidx.compose.foundation.layout.Arrangement
+import com.officetracker.core.model.effectiveSchedule
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -57,6 +58,9 @@ import com.officetracker.core.model.Timeline
 import com.officetracker.core.model.UserProfile
 import com.officetracker.core.model.WorkStatus
 import com.officetracker.core.model.Workday
+import com.officetracker.core.model.WorkSchedule
+import com.officetracker.ui.components.summary
+import com.officetracker.core.model.effectiveDistance
 import com.officetracker.core.util.Dates
 import com.officetracker.ui.appViewModel
 import com.officetracker.ui.components.Banner
@@ -235,7 +239,29 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
             )
         }
 
-        item { DayStats(day, d.stays.size, config.ratePerKm, now) }
+        val autoSchedule = profile.effectiveSchedule(config.schedule)?.takeIf { features.scheduler }
+        if (autoSchedule != null) {
+            if (autoSchedule.autoStart && permissionState.precise && !permissionState.background) item {
+                Banner(
+                    "Allow location \"All the time\" so your workday can start automatically at ${WorkSchedule.formatMinute(autoSchedule.startMinute)}.",
+                    Icons.Default.LocationOn, Brand.Warning, actionLabel = "Allow",
+                ) { askBackground() }
+            }
+            item {
+                Text(
+                    "Schedule: ${autoSchedule.summary()}",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            val schedule = profile.effectiveSchedule(config.schedule)?.takeIf { features.scheduler }
+            DayStats(
+                day, d.stays.size, config.ratePerKm, now,
+                distanceMeters = d.effectiveDistance(),
+                lateMinutes = day?.let { schedule?.lateMinutes(it.startedAt, Dates.zone) } ?: 0,
+            )
+        }
         item { DayMapCard(d) }
         item {
             SectionTitle("Visits") {

@@ -3,6 +3,7 @@
 package com.officetracker.ui.day
 
 import androidx.compose.foundation.layout.Arrangement
+import com.officetracker.core.model.effectiveSchedule
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -50,6 +51,8 @@ import com.officetracker.core.model.PlaceCategory
 import com.officetracker.core.model.Stay
 import com.officetracker.core.model.Timeline
 import com.officetracker.core.model.UserProfile
+import com.officetracker.core.model.WorkSchedule
+import com.officetracker.core.model.effectiveDistance
 import com.officetracker.core.util.Dates
 import com.officetracker.ui.appViewModel
 import com.officetracker.ui.components.DayMapCard
@@ -70,6 +73,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.emitAll
@@ -120,6 +124,13 @@ class DayViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DayState(initialDate))
 
+    /** The person's effective schedule, for the late indicator. */
+    val schedule: StateFlow<WorkSchedule> = combine(
+        c.users.observeUser(uid).catch { emit(null) },
+        c.org.config,
+    ) { person, config -> person?.effectiveSchedule(config.schedule) ?: WorkSchedule() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WorkSchedule())
+
     fun setDate(key: String) {
         if (key <= Dates.todayKey()) date.value = key
     }
@@ -141,6 +152,7 @@ fun DayDetailScreen(viewer: UserProfile, uid: String, initialDate: String, onBac
     val isSelf = uid == viewer.uid
     val vm = appViewModel(key = "day-$uid") { DayViewModel(it, uid, initialDate, isSelf) }
     val state by vm.state.collectAsStateWithLifecycle()
+    val schedule by vm.schedule.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val features by rememberFeatures()
 
@@ -169,6 +181,7 @@ fun DayDetailScreen(viewer: UserProfile, uid: String, initialDate: String, onBac
                 onShift = vm::shift,
                 onPick = vm::setDate,
                 onRelabel = if (state.local) vm::relabel else null,
+                schedule = schedule,
             )
         }
     }
@@ -180,6 +193,7 @@ fun LazyListScope.dayContent(
     onShift: (Long) -> Unit,
     onPick: (String) -> Unit,
     onRelabel: ((Stay, String, PlaceCategory) -> Unit)?,
+    schedule: WorkSchedule = WorkSchedule(),
 ) {
     item { DateSwitcher(state.date, onShift, onPick) }
     if (state.loading) {
@@ -192,11 +206,11 @@ fun LazyListScope.dayContent(
         item { EmptyState(Icons.Default.EventBusy, "No workday", "Nothing was recorded on ${Dates.day(state.date)}.") }
         return
     }
-    item { DayBody(detail, onRelabel) }
+    item { DayBody(detail, onRelabel, schedule) }
 }
 
 @Composable
-private fun DayBody(detail: DayDetail, onRelabel: ((Stay, String, PlaceCategory) -> Unit)?) {
+private fun DayBody(detail: DayDetail, onRelabel: ((Stay, String, PlaceCategory) -> Unit)?, schedule: WorkSchedule) {
     val config by OfficeConfig.collect()
     val now = rememberNow()
     var editing by remember { mutableStateOf<Stay?>(null) }
@@ -210,7 +224,12 @@ private fun DayBody(detail: DayDetail, onRelabel: ((Stay, String, PlaceCategory)
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        DayStats(day, detail.stays.size, config.ratePerKm, now)
+        DayStats(
+            day, detail.stays.size, config.ratePerKm, now,
+            distanceMeters = detail.effectiveDistance(),
+            lateMinutes = schedule.lateMinutes(day.startedAt, Dates.zone),
+        )
+        DayEnds(day)
         DayMapCard(detail, fitKey = day.date)
         SectionTitle("Visits")
         if (timeline.isEmpty()) {
@@ -258,5 +277,28 @@ fun DateSwitcher(date: String, onShift: (Long) -> Unit, onPick: (String) -> Unit
         ) {
             DatePicker(state = pickerState)
         }
+    }
+}
+
+/** Where and when the day began and ended. */
+@Composable
+private fun DayEnds(day: com.officetracker.core.model.Workday) {
+    com.officetracker.ui.components.SectionCard(padding = PaddingValues(14.dp)) {
+        androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            EndRow("S", com.officetracker.ui.theme.Brand.Success, Dates.time(day.startedAt), day.startName ?: "Start location")
+            val ended = day.endedAt
+            if (ended != null) EndRow("E", com.officetracker.ui.theme.Brand.Danger, Dates.time(ended), day.endName ?: "End location")
+            else Text("Still on duty", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun EndRow(label: String, color: androidx.compose.ui.graphics.Color, time: String, place: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        com.officetracker.ui.components.Avatar(label, color, size = 28.dp)
+        androidx.compose.foundation.layout.Spacer(Modifier.padding(start = 10.dp))
+        Text(time, style = MaterialTheme.typography.titleSmall)
+        Text("  ·  $place", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
     }
 }

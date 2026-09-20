@@ -132,8 +132,16 @@ fun LiveState?.statusColor(now: Long): Color = when {
 // ---------- Stats ----------
 
 @Composable
-fun DayStats(day: Workday?, visits: Int, ratePerKm: Double, now: Long, modifier: Modifier = Modifier) {
-    val distance = day?.distanceMeters ?: 0.0
+fun DayStats(
+    day: Workday?,
+    visits: Int,
+    ratePerKm: Double,
+    now: Long,
+    modifier: Modifier = Modifier,
+    distanceMeters: Double? = null,
+    lateMinutes: Int = 0,
+) {
+    val distance = distanceMeters ?: day?.distanceMeters ?: 0.0
     val features by rememberFeatures()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -148,6 +156,12 @@ fun DayStats(day: Workday?, visits: Int, ratePerKm: Double, now: Long, modifier:
                 StatTile("Pauses", (day?.pauseCount ?: 0).toString(), Icons.Default.Schedule, Modifier.weight(1f), tint = Brand.Warning)
             }
         }
+        if (lateMinutes > 0) {
+            Banner(
+                text = "Started ${Dates.duration(lateMinutes * 60_000L)} late.",
+                icon = Icons.Default.Schedule, color = Brand.Warning,
+            )
+        }
         if (day != null && day.mockCount > 0 && features.fakeGpsAlerts) {
             Banner(
                 text = "Fake GPS was detected ${day.mockCount} times on this day.",
@@ -161,78 +175,6 @@ fun DayStats(day: Workday?, visits: Int, ratePerKm: Double, now: Long, modifier:
 @Composable
 fun rememberFeatures(): State<Features> =
     com.officetracker.OfficeTrackerApp.container.org.features.collectAsStateWithLifecycle()
-
-// ---------- Map ----------
-
-fun DayDetail.mapMarkers(showLive: Boolean): List<MapMarker> = buildList {
-    val w = workday
-    if (w?.startLatitude != null && w.startLongitude != null) {
-        add(MapMarker("start", w.startLatitude, w.startLongitude, "Day started", w.startName?.let { "${Dates.time(w.startedAt)} · $it" } ?: Dates.time(w.startedAt), Brand.Success, "S"))
-    }
-    stays.sortedBy { it.arrivalAt }.forEachIndexed { i, s ->
-        add(
-            MapMarker(
-                "stay:${s.id}", s.latitude, s.longitude, "${i + 1}. ${s.name}",
-                "${Dates.time(s.arrivalAt)} – ${s.departureAt?.let { Dates.time(it) } ?: "now"}",
-                s.category.color(), (i + 1).toString(),
-            )
-        )
-    }
-    if (w?.endLatitude != null && w.endLongitude != null && w.endedAt != null) {
-        add(MapMarker("end", w.endLatitude, w.endLongitude, "Day ended", w.endName?.let { "${Dates.time(w.endedAt)} · $it" } ?: Dates.time(w.endedAt), Brand.Danger, "E"))
-    }
-    if (showLive && w?.status == WorkStatus.ACTIVE) {
-        route.lastOrNull()?.let { add(MapMarker("live", it.latitude, it.longitude, "Now", Dates.time(it.time), Brand.Route, pulse = true)) }
-    }
-}
-
-@Composable
-fun DayMapCard(detail: DayDetail, height: Dp = 260.dp, showLive: Boolean = true, fitKey: Any? = detail.workday?.date) {
-    var fullscreen by remember { mutableStateOf(false) }
-    val markers = detail.mapMarkers(showLive)
-    Box(
-        Modifier.fillMaxWidth().height(height).clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-    ) {
-        if (detail.route.isEmpty() && markers.isEmpty()) {
-            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.Route, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(6.dp))
-                Text("Route appears here once tracking starts", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-            }
-        } else {
-            OsmMap(Modifier.fillMaxSize(), route = detail.route, markers = markers, fitKey = fitKey)
-            FilledTonalIconButton(onClick = { fullscreen = true }, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                Icon(Icons.Default.Fullscreen, contentDescription = "Full screen map")
-            }
-        }
-    }
-    if (fullscreen) FullscreenMap(detail, showLive) { fullscreen = false }
-}
-
-@Composable
-fun FullscreenMap(detail: DayDetail, showLive: Boolean, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize()) {
-                OsmMap(Modifier.fillMaxSize(), route = detail.route, markers = detail.mapMarkers(showLive), fitKey = "full")
-                FilledTonalIconButton(onClick = onDismiss, modifier = Modifier.statusBarsPadding().padding(12.dp).align(Alignment.TopEnd)) {
-                    Icon(Icons.Default.Close, contentDescription = "Close map")
-                }
-                Surface(
-                    Modifier.align(Alignment.BottomCenter).padding(16.dp),
-                    shape = MaterialTheme.shapes.medium, tonalElevation = 3.dp, shadowElevation = 4.dp,
-                ) {
-                    val w = detail.workday
-                    Text(
-                        "${detail.stays.size} visits · ${Format.distance(w?.distanceMeters ?: 0.0)}",
-                        Modifier.padding(horizontal = 16.dp, vertical = 10.dp), style = MaterialTheme.typography.labelLarge,
-                    )
-                }
-            }
-        }
-    }
-}
 
 // ---------- Timeline ----------
 

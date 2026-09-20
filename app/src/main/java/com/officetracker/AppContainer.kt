@@ -22,7 +22,9 @@ import com.officetracker.tracking.LocationClient
 import com.officetracker.tracking.PlaceNamer
 import com.officetracker.tracking.TrackingController
 import com.officetracker.tracking.TrackingProcessor
+import com.officetracker.tracking.ScheduleManager
 import com.officetracker.tracking.TrackingService
+import com.officetracker.tracking.WatchdogWorker
 import com.officetracker.update.UpdateController
 import com.officetracker.update.UpdateManager
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +35,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Manual dependency injection: one place that wires the app together. */
 class AppContainer(private val context: Context) {
@@ -65,6 +68,8 @@ class AppContainer(private val context: Context) {
     val reports: ReportExporter by lazy { ReportExporter(context) }
     val updates: UpdateController by lazy { UpdateController(UpdateManager(context, store), appScope) }
 
+    val scheduler: ScheduleManager by lazy { ScheduleManager(context, auth, org) }
+
     fun newProcessor(uid: String) = TrackingProcessor(context, uid, db, org, namer, sync, locationClient)
 
     /** Keeps shared listeners and background work in step with the signed-in user. */
@@ -82,6 +87,7 @@ class AppContainer(private val context: Context) {
                             org.stopListening()
                         } else {
                             org.startListening(cid)
+                            WatchdogWorker.schedule(context)
                             sync.schedulePeriodic()
                             sync.requestSync(expedited = true)
                             tracking.ensureServiceState()
@@ -93,11 +99,13 @@ class AppContainer(private val context: Context) {
                         org.stopListening()
                         platform.stopListening()
                         sync.cancelAll()
+                        scheduler.cancel()
                     }
                     Session.Loading -> Unit
                 }
             }
         }
+        watchDeviceAndSchedule()
         // Subscription enforcement: re-evaluated on every company change and once a minute, so a
         // suspension or an expiry takes effect on the phone without a restart.
         appScope.launch {
@@ -107,6 +115,47 @@ class AppContainer(private val context: Context) {
                     if (access != null && !access.usable) tracking.lockedByPlan()
                 }
         }
+    }
+
+    /**
+     * One device per account: if the company requires it and the account was signed in on
+     * another phone (or an admin signed it out), pause tracking here and sign out.
+     * Also re-arms the auto start/end alarms whenever the profile or company changes.
+     */
+    private fun watchDeviceAndSchedule() {
+        appScope.launch {
+            // Claim at most once per account per process: if the write is rejected (e.g. rules not
+            // yet published) the rolled-back snapshot shows null again and would re-claim forever.
+            var claimedFor: String? = null
+            combine(auth.session, org.company) { s, c -> s to c }.collect { (session, companyState) ->
+                val profile = (session as? Session.SignedIn)?.profile ?: return@collect
+                if (profile.isSuperAdmin) return@collect
+                val company = (companyState as? CompanyState.Loaded)?.company ?: return@collect
+                scheduler.reschedule()
+                if (auth.claimingDevice) return@collect
+                val active = profile.activeDeviceId
+                val mine = auth.deviceId()
+                when {
+                    active == SessionStore.CACHED_DEVICE -> Unit // offline start: wait for the real profile
+                    active == null && claimedFor == profile.uid -> Unit
+                    active == null -> { // accounts from before this feature
+                        claimedFor = profile.uid
+                        auth.claimDevice(profile.uid)
+                    }
+                    active.startsWith(UserRepository.REVOKED_PREFIX) -> kickOut("You were signed out by your administrator.")
+                    company.features.singleDevice && active != mine ->
+                        kickOut("Your account was signed in on another phone (${profile.activeDeviceName ?: "unknown"}). Only one phone can be used at a time.")
+                }
+            }
+        }
+    }
+
+    private suspend fun kickOut(message: String) {
+        val uid = auth.currentUid
+        tracking.lockedByPlan()
+        // Upload what this phone recorded before it loses access.
+        if (uid != null) withTimeoutOrNull(10_000) { runCatching { uploader.uploadPending(uid) } }
+        auth.signOutWithMessage(message)
     }
 
     private fun ticker(periodMs: Long) = flow {

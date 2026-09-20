@@ -48,6 +48,13 @@ fun Context.isIgnoringBatteryOptimizations(): Boolean =
 fun Context.batteryOptimizationIntent(): Intent =
     Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
 
+fun Context.exactAlarmSettingsIntent(): Intent =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName"))
+    } else {
+        appSettingsIntent()
+    }
+
 fun Context.appSettingsIntent(): Intent =
     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
 

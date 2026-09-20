@@ -5,6 +5,7 @@ import com.officetracker.BuildConfig
 import com.officetracker.core.model.AccessState
 import com.officetracker.core.model.LiveState
 import com.officetracker.core.model.WorkStatus
+import com.officetracker.core.util.Dates
 import com.officetracker.core.model.Workday
 import com.officetracker.data.repo.AuthRepository
 import com.officetracker.data.repo.NamedLocation
@@ -49,15 +50,25 @@ class TrackingController(
         checkPlan()
         check(locationClient.hasForegroundPermission()) { "Location permission is required to start your day." }
         check(locationClient.isLocationEnabled()) { "Turn on Location (GPS) to start your day." }
+        val now = System.currentTimeMillis()
         val open = workdays.openWorkday(uid)
-        if (open?.status == WorkStatus.PAUSED) {
-            workdays.resume(uid, System.currentTimeMillis())
-        } else if (open == null || open.status != WorkStatus.ACTIVE) {
-            val here = currentNamedLocation(uid)
-            workdays.startDay(uid, System.currentTimeMillis(), here)
+        val staleOpen = open != null && open.date != Dates.keyOf(now)
+        var createdDate: String? = null
+        when {
+            open?.status == WorkStatus.PAUSED && !staleOpen -> workdays.resume(uid, now)
+            open == null || staleOpen || open.status != WorkStatus.ACTIVE -> {
+                // Create the day and start GPS straight away; the start place is filled in once a
+                // fix arrives (waiting first could outlast Android's background-start allowance).
+                createdDate = workdays.startDay(uid, now, null).date
+            }
         }
-        TrackingService.start(context)
+        if (!TrackingService.start(context)) {
+            error("Android did not allow tracking to start in the background. Open the app to start it.")
+        }
         publishStatus(uid, WorkStatus.ACTIVE, here = null)
+        createdDate?.let { date ->
+            currentNamedLocation(uid)?.let { here -> workdays.fillStart(uid, date, here) }
+        }
     }
 
     suspend fun pause(): Result<Unit> = runCatching {
@@ -78,10 +89,17 @@ class TrackingController(
 
     suspend fun endDay(): Result<Unit> = runCatching {
         val uid = uid()
+        val date = workdays.openWorkday(uid)?.date
         val here = currentNamedLocation(uid, timeoutMs = 6_000)
         workdays.endDay(uid, System.currentTimeMillis(), here)
         TrackingService.stop(context)
         publishStatus(uid, WorkStatus.ENDED, here)
+        // No fresh fix: the last route point was used; give it a name too.
+        if (here == null && date != null) {
+            workdays.endPointNeedingName(uid, date)?.let { (lat, lng) ->
+                workdays.fillEndName(uid, date, namer.label(uid, lat, lng).name)
+            }
+        }
     }
 
     /** Restarts the service if the app was killed while a workday was active. */
@@ -118,6 +136,7 @@ class TrackingController(
                 distanceMeters = day?.distanceMeters ?: 0.0,
                 appVersion = BuildConfig.VERSION_NAME,
                 updatedAt = System.currentTimeMillis(),
+                dayStartedAt = day?.startedAt,
             )
         )
     }

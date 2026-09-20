@@ -22,10 +22,14 @@ data class Features(
     val reports: Boolean = true,
     val allowance: Boolean = true,
     val fakeGpsAlerts: Boolean = true,
+    /** One account = one phone: signing in elsewhere signs the old phone out. */
+    val singleDevice: Boolean = true,
+    val scheduler: Boolean = true,
 ) {
     fun toMap(): Map<String, Boolean> = mapOf(
         "liveMap" to liveMap, "places" to places, "reports" to reports,
         "allowance" to allowance, "fakeGpsAlerts" to fakeGpsAlerts,
+        "singleDevice" to singleDevice, "scheduler" to scheduler,
     )
 
     companion object {
@@ -36,12 +40,20 @@ data class Features(
             "reports" to "Report export (CSV)",
             "allowance" to "Travel allowance",
             "fakeGpsAlerts" to "Fake-GPS alerts",
+            "singleDevice" to "One device per account",
+            "scheduler" to "Auto start / end schedule",
         )
 
         fun fromMap(m: Map<*, *>?): Features {
             if (m == null) return ALL
             fun b(k: String) = (m[k] as? Boolean) ?: true
-            return Features(b("liveMap"), b("places"), b("reports"), b("allowance"), b("fakeGpsAlerts"))
+            return Features(
+                b("liveMap"), b("places"), b("reports"), b("allowance"), b("fakeGpsAlerts"),
+                // Added later: off for existing companies until the super admin switches it on,
+                // so nobody is signed out unexpectedly by an app update.
+                singleDevice = (m["singleDevice"] as? Boolean) ?: false,
+                scheduler = b("scheduler"),
+            )
         }
     }
 
@@ -51,6 +63,8 @@ data class Features(
         "reports" -> copy(reports = value)
         "allowance" -> copy(allowance = value)
         "fakeGpsAlerts" -> copy(fakeGpsAlerts = value)
+        "singleDevice" -> copy(singleDevice = value)
+        "scheduler" -> copy(scheduler = value)
         else -> this
     }
 
@@ -183,7 +197,7 @@ object StarterPlans {
     fun all(): List<Plan> = listOf(
         Plan("trial", "Free trial", "Try every feature", Billing.TRIAL, 14, 0.0, 5, 1, Features.ALL, true, 0),
         Plan("starter-monthly", "Starter", "Small teams, billed monthly", Billing.MONTHLY, 30, 1500.0, 10, 1,
-            Features(liveMap = true, places = true, reports = true, allowance = true, fakeGpsAlerts = false), true, 1),
+            Features(fakeGpsAlerts = false, scheduler = false), true, 1),
         Plan("business-monthly", "Business", "Growing teams, billed monthly", Billing.MONTHLY, 30, 4000.0, 50, 3, Features.ALL, true, 2),
         Plan("business-yearly", "Business (yearly)", "Two months free", Billing.YEARLY, 365, 40000.0, 50, 3, Features.ALL, true, 3),
         Plan("enterprise-yearly", "Enterprise", "Large organisations", Billing.YEARLY, 365, 120000.0, 500, 10, Features.ALL, true, 4),

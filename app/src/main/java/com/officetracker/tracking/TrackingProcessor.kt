@@ -87,12 +87,17 @@ class TrackingProcessor(
 
         val store = decision.moved || sample.time - lastStoredAt >= 60_000
         val newStays = mutableListOf<String>()
+        var needsStartName = false
 
+        // Re-read the workday inside the transaction and apply only deltas, so a pause / end
+        // made meanwhile (from the screen, the notification or the scheduler) is never undone.
         val updatedDay = db.withTransaction {
+            val fresh = dao.getOpenWorkday(uid)?.takeIf { it.status == WorkStatus.ACTIVE.name && it.date == day.date }
+                ?: return@withTransaction null
             if (store) {
                 dao.insertPoint(
                     TrackPointEntity(
-                        userId = uid, date = day.date, latitude = sample.latitude, longitude = sample.longitude,
+                        userId = uid, date = fresh.date, latitude = sample.latitude, longitude = sample.longitude,
                         accuracy = sample.accuracy, speed = sample.speed, time = sample.time, mock = sample.mock,
                     )
                 )
@@ -106,7 +111,7 @@ class TrackingProcessor(
                         val label = namer.quickLabel(uid, s.latitude, s.longitude)
                         dao.upsertStay(
                             StayEntity(
-                                id = s.id, userId = uid, date = day.date,
+                                id = s.id, userId = uid, date = fresh.date,
                                 latitude = s.latitude, longitude = s.longitude, sampleCount = s.samples,
                                 arrivalAt = s.arrivalAt, lastSeenAt = s.lastInsideAt,
                                 placeId = label?.placeId,
@@ -144,15 +149,29 @@ class TrackingProcessor(
                     }
                 }
             }
-            val updated = day.copy(
-                distanceMeters = day.distanceMeters + addDistance,
+            // No location was available when the day started: the first good fix becomes the start.
+            val missingStart = fresh.startLat == null || fresh.startLng == null
+            if (missingStart) needsStartName = true
+            val updated = fresh.copy(
+                distanceMeters = fresh.distanceMeters + addDistance,
                 anchorLat = anchor?.latitude, anchorLng = anchor?.longitude, anchorTime = anchor?.time,
-                pointCount = day.pointCount + if (store) 1 else 0,
-                mockCount = day.mockCount + if (sample.mock) 1 else 0,
+                pointCount = fresh.pointCount + if (store) 1 else 0,
+                mockCount = fresh.mockCount + if (sample.mock) 1 else 0,
+                startLat = if (missingStart) sample.latitude else fresh.startLat,
+                startLng = if (missingStart) sample.longitude else fresh.startLng,
                 updatedAt = System.currentTimeMillis(), dirty = true,
             )
             dao.upsertWorkday(updated)
             updated
+        } ?: run {
+            detector.reset()
+            return ProcessResult(MotionMode.MOVING, null, null)
+        }
+
+        if (needsStartName) {
+            namer.label(uid, sample.latitude, sample.longitude).let { label ->
+                dao.fillStartName(uid, updatedDay.date, label.name, System.currentTimeMillis())
+            }
         }
 
         // Network naming happens outside the transaction.
@@ -211,6 +230,7 @@ class TrackingProcessor(
                 distanceMeters = day.distanceMeters,
                 appVersion = BuildConfig.VERSION_NAME,
                 updatedAt = lastLiveAt,
+                dayStartedAt = day.startedAt,
             )
         )
     }
