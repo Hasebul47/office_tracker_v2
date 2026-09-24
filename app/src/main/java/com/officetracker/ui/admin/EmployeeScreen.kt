@@ -116,6 +116,15 @@ class EmployeeViewModel(private val c: AppContainer, private val uid: String) : 
             .onFailure { message = it.message }
     }
 
+    /** Administrator approval of a day's overtime (stored in the cloud, phones never overwrite it). */
+    fun approveOt(date: String, approved: Boolean, onDone: () -> Unit) = launchBusy {
+        c.cloudDays.setOtApproved(uid, date, approved)
+            .onSuccess { message = if (approved) "Overtime approved." else "Approval removed."; onDone() }
+            .onFailure { message = it.message }
+    }
+
+    val attendanceSettings = c.org.config
+
     fun revokeDevice() = launchBusy {
         c.users.revokeDevice(uid)
             .onSuccess { message = "Signed out from their phone. They can sign in again on any phone." }
@@ -143,6 +152,7 @@ class EmployeeViewModel(private val c: AppContainer, private val uid: String) : 
                 val file = c.reports.monthReport(
                     profile, month, days, visits, c.org.config.value.ratePerKm,
                     profile.effectiveSchedule(c.org.config.value.schedule),
+                    c.org.config.value.attendance.takeIf { c.org.features.value.attendance },
                 )
                 onReady(c.reports.shareIntent(file, "${profile.name} · ${Dates.month(month)}"))
             }
@@ -177,6 +187,7 @@ fun EmployeeScreen(viewer: UserProfile, uid: String, onBack: () -> Unit) {
     var editingSchedule by remember { mutableStateOf(false) }
     var confirmRevoke by remember { mutableStateOf(false) }
     val companySchedule by vm.companySchedule.collectAsStateWithLifecycle()
+    val attendance by vm.attendanceSettings.collectAsStateWithLifecycle()
     val daySchedule by dayVm.schedule.collectAsStateWithLifecycle()
 
     val p = profile
@@ -265,6 +276,28 @@ fun EmployeeScreen(viewer: UserProfile, uid: String, onBack: () -> Unit) {
                 }
             }
             dayContent(state = day, onShift = dayVm::shift, onPick = dayVm::setDate, onRelabel = null, schedule = daySchedule)
+            val dayWorkday = day.detail?.workday
+            if (features.overtime && attendance.attendance.otEnabled && dayWorkday != null && dayWorkday.otMillis > 0) {
+                item {
+                    SectionCard {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Overtime ${Dates.duration(dayWorkday.otMillis)}", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    if (dayWorkday.otApproved) "Approved for payment"
+                                    else if (attendance.attendance.otRequiresApproval) "Waiting for your approval"
+                                    else "Counted automatically",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(
+                                enabled = !vm.busy,
+                                onClick = { vm.approveOt(day.date, !dayWorkday.otApproved) { dayVm.refresh() } },
+                            ) { Text(if (dayWorkday.otApproved) "Remove" else "Approve") }
+                        }
+                    }
+                }
+            }
             item { Spacer(Modifier.height(24.dp)) }
         }
     }

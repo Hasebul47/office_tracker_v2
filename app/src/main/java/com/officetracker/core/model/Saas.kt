@@ -25,11 +25,14 @@ data class Features(
     /** One account = one phone: signing in elsewhere signs the old phone out. */
     val singleDevice: Boolean = true,
     val scheduler: Boolean = true,
+    val attendance: Boolean = true,
+    val overtime: Boolean = true,
 ) {
     fun toMap(): Map<String, Boolean> = mapOf(
         "liveMap" to liveMap, "places" to places, "reports" to reports,
         "allowance" to allowance, "fakeGpsAlerts" to fakeGpsAlerts,
         "singleDevice" to singleDevice, "scheduler" to scheduler,
+        "attendance" to attendance, "overtime" to overtime,
     )
 
     companion object {
@@ -42,6 +45,8 @@ data class Features(
             "fakeGpsAlerts" to "Fake-GPS alerts",
             "singleDevice" to "One device per account",
             "scheduler" to "Auto start / end schedule",
+            "attendance" to "Attendance punching (geofence)",
+            "overtime" to "Overtime (OT)",
         )
 
         fun fromMap(m: Map<*, *>?): Features {
@@ -53,6 +58,8 @@ data class Features(
                 // so nobody is signed out unexpectedly by an app update.
                 singleDevice = (m["singleDevice"] as? Boolean) ?: false,
                 scheduler = b("scheduler"),
+                attendance = b("attendance"),
+                overtime = b("overtime"),
             )
         }
     }
@@ -65,6 +72,8 @@ data class Features(
         "fakeGpsAlerts" -> copy(fakeGpsAlerts = value)
         "singleDevice" -> copy(singleDevice = value)
         "scheduler" -> copy(scheduler = value)
+        "attendance" -> copy(attendance = value)
+        "overtime" -> copy(overtime = value)
         else -> this
     }
 

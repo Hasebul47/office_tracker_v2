@@ -105,6 +105,8 @@ class WorkdayRepository(
             dao.upsertWorkday(
                 day.copy(
                     status = WorkStatus.PAUSED.name, pausedAt = at, pauseCount = day.pauseCount + 1,
+                    // Attendance stops accruing while paused: the gap must not be bridged on resume.
+                    zoneSince = null,
                     updatedAt = System.currentTimeMillis(), dirty = true,
                 )
             )
@@ -154,6 +156,7 @@ class WorkdayRepository(
                 endName = location?.name,
                 endLat = location?.latitude ?: last?.latitude,
                 endLng = location?.longitude ?: last?.longitude,
+                zoneSince = null,
                 updatedAt = System.currentTimeMillis(), dirty = true,
             )
         )

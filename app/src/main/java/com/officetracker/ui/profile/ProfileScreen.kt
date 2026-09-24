@@ -39,6 +39,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import com.officetracker.core.model.AttendanceSettings
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -228,6 +230,12 @@ fun ProfileScreen(
             if (profile.isAdmin) {
                 SectionTitle("Organisation settings")
                 OrgSettingsCard(config, vm.busy, showAllowance = company.features.allowance, onSave = vm::saveConfig)
+                if (company.features.attendance) {
+                    SectionTitle("Attendance & overtime")
+                    AttendanceSettingsCard(config, vm.busy, showOt = company.features.overtime) {
+                        vm.saveConfig(config.copy(attendance = it))
+                    }
+                }
                 if (company.features.scheduler) {
                     SectionTitle("Company work schedule")
                     CompanyScheduleCard(config, vm.busy) { vm.saveConfig(config.copy(schedule = it)) }
@@ -302,6 +310,67 @@ private fun CheckRow(icon: ImageVector, title: String, subtitle: String, ok: Boo
         }
         if (ok) Icon(Icons.Default.CheckCircle, contentDescription = "OK", tint = Brand.Success, modifier = Modifier.size(22.dp))
         else TextButton(onClick = onFix) { Text("Fix", color = Color(0xFFD98A00)) }
+    }
+}
+
+@Composable
+private fun AttendanceSettingsCard(
+    config: AppConfig,
+    busy: Boolean,
+    showOt: Boolean,
+    onSave: (AttendanceSettings) -> Unit,
+) {
+    var draft by remember(config.attendance) { mutableStateOf(config.attendance) }
+    SectionCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Mark your offices and sites as attendance zones in the Places tab. Time inside them counts as attendance.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SettingSwitch("Attendance punching", draft.enabled) { draft = draft.copy(enabled = it) }
+            if (draft.enabled) {
+                SettingSwitch("Must be inside a zone to punch in", draft.requireZoneToPunch) {
+                    draft = draft.copy(requireZoneToPunch = it)
+                }
+                if (showOt) {
+                    SettingSwitch("Count overtime after the end time", draft.otEnabled) { draft = draft.copy(otEnabled = it) }
+                    if (draft.otEnabled) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            NumberField("OT starts after (min)", draft.otGraceMinutes.toString(), Modifier.weight(1f)) { v ->
+                                draft = draft.copy(otGraceMinutes = v.toIntOrNull() ?: draft.otGraceMinutes)
+                            }
+                            NumberField("Minimum OT (min)", draft.otMinMinutes.toString(), Modifier.weight(1f)) { v ->
+                                draft = draft.copy(otMinMinutes = v.toIntOrNull() ?: draft.otMinMinutes)
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            NumberField("Max OT per day (h)", draft.otMaxHours.toString(), Modifier.weight(1f)) { v ->
+                                draft = draft.copy(otMaxHours = v.toIntOrNull() ?: draft.otMaxHours)
+                            }
+                            NumberField("OT rate per hour (৳)", draft.otRatePerHour.toString(), Modifier.weight(1f)) { v ->
+                                draft = draft.copy(otRatePerHour = v.toDoubleOrNull() ?: draft.otRatePerHour)
+                            }
+                        }
+                        SettingSwitch("Overtime needs my approval", draft.otRequiresApproval) {
+                            draft = draft.copy(otRequiresApproval = it)
+                        }
+                    }
+                }
+            }
+            LoadingButton(
+                text = "Save attendance settings", loading = busy, modifier = Modifier.fillMaxWidth(),
+                enabled = draft != config.attendance,
+                onClick = { onSave(draft) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 

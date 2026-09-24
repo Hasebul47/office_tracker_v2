@@ -60,7 +60,7 @@ class ScheduleReceiver : BroadcastReceiver() {
             )
             return
         }
-        c.tracking.startDay()
+        c.tracking.startDay(manual = false)
             .onSuccess {
                 Notifier.alert(context, Notifier.ID_SCHEDULE, "Workday started", "Tracking started automatically at $time.")
             }

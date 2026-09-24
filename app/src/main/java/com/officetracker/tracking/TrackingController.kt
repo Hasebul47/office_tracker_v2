@@ -3,6 +3,10 @@ package com.officetracker.tracking
 import android.content.Context
 import com.officetracker.BuildConfig
 import com.officetracker.core.model.AccessState
+import com.officetracker.core.model.Attendance
+import com.officetracker.core.model.Place
+import com.officetracker.core.util.Format
+import com.officetracker.core.util.Geo
 import com.officetracker.core.model.LiveState
 import com.officetracker.core.model.WorkStatus
 import com.officetracker.core.util.Dates
@@ -22,6 +26,19 @@ class TrackingController(
     private val namer: PlaceNamer,
 ) {
     private fun uid(): String = auth.currentUid ?: error("Not signed in.")
+
+    /** Blocks punching in when the company requires it to happen inside an office zone. */
+    private suspend fun checkInsideZone() {
+        val settings = org.config.value.attendance
+        if (!org.features.value.attendance || !settings.enabled || !settings.requireZoneToPunch) return
+        if (org.places.value.none { it.attendance }) return // no zones defined yet
+        if (currentZone() != null) return
+        val nearest = nearestZone()
+        error(
+            if (nearest != null) "You are ${Format.distance(nearest.second)} from ${nearest.first.name}. Punch in at the office."
+            else "You must be at an office location to punch in."
+        )
+    }
 
     /** Blocks tracking when the company's subscription does not allow it. */
     private fun checkPlan() {
@@ -45,11 +62,32 @@ class TrackingController(
         TrackingService.stop(context)
     }
 
-    suspend fun startDay(): Result<Unit> = runCatching {
+    /** Is the phone inside an attendance zone right now? Null when it cannot get a fix. */
+    suspend fun currentZone(): Place? {
+        val loc = locationClient.currentLocation(8_000) ?: return null
+        return Attendance.zoneAt(org.places.value, loc.latitude, loc.longitude)
+    }
+
+    /** Nearest attendance zone and how far away it is, for the "you are too far" message. */
+    suspend fun nearestZone(): Pair<Place, Double>? {
+        val loc = locationClient.currentLocation(8_000) ?: return null
+        return org.places.value.filter { it.attendance }
+            .map { it to Geo.distanceMeters(loc.latitude, loc.longitude, it.latitude, it.longitude) }
+            .minByOrNull { it.second }
+    }
+
+    /**
+     * [manual] = the employee tapped Punch in / Start. Then the company's attendance rule can
+     * require them to be inside an office zone; the scheduler starts the day regardless, and
+     * attendance simply begins when they arrive.
+     */
+    suspend fun startDay(manual: Boolean = true): Result<Unit> = runCatching {
         val uid = uid()
         checkPlan()
         check(locationClient.hasForegroundPermission()) { "Location permission is required to start your day." }
         check(locationClient.isLocationEnabled()) { "Turn on Location (GPS) to start your day." }
+        // After the permission / GPS checks, so a missing fix is not reported as "you are too far".
+        if (manual) checkInsideZone()
         val now = System.currentTimeMillis()
         val open = workdays.openWorkday(uid)
         val staleOpen = open != null && open.date != Dates.keyOf(now)
@@ -86,10 +124,11 @@ class TrackingController(
         publishStatus(uid, WorkStatus.PAUSED, here = null)
     }
 
-    suspend fun resume(): Result<Unit> = runCatching {
+    suspend fun resume(manual: Boolean = true): Result<Unit> = runCatching {
         val uid = uid()
         checkPlan()
         check(locationClient.hasForegroundPermission()) { "Location permission is required." }
+        if (manual) checkInsideZone()
         workdays.resume(uid, System.currentTimeMillis())
         TrackingService.start(context)
         publishStatus(uid, WorkStatus.ACTIVE, here = null)
@@ -128,6 +167,8 @@ class TrackingController(
     }
 
     private suspend fun publishStatus(uid: String, status: WorkStatus, here: NamedLocation?) {
+        // Off duty: clear the attendance zone so the team list stops showing "At <office>".
+        val offDuty = status != WorkStatus.ACTIVE
         val day: Workday? = workdays.openWorkday(uid)
         val health = DeviceStatus.read(context)
         org.publishLive(
@@ -142,6 +183,8 @@ class TrackingController(
                 charging = health.charging,
                 gpsEnabled = locationClient.isLocationEnabled(),
                 mockLocation = false,
+                inZone = if (offDuty) false else null,
+                zoneName = null,
                 distanceMeters = day?.distanceMeters ?: 0.0,
                 appVersion = BuildConfig.VERSION_NAME,
                 updatedAt = System.currentTimeMillis(),

@@ -34,6 +34,16 @@ data class WorkdayEntity(
     val anchorTime: Long? = null,
     val updatedAt: Long = System.currentTimeMillis(),
     val dirty: Boolean = true,
+    // ---- Attendance ----
+    val checkInAt: Long? = null,
+    val checkInPlace: String? = null,
+    val checkOutAt: Long? = null,
+    val checkOutPlace: String? = null,
+    val insideMillis: Long = 0,
+    val otMillis: Long = 0,
+    val otApproved: Boolean = false,
+    /** Time of the last GPS fix inside an attendance zone (for time accounting). */
+    val zoneSince: Long? = null,
 ) {
     fun toModel() = Workday(
         userId = userId, date = date, status = WorkStatus.from(status),
@@ -42,6 +52,8 @@ data class WorkdayEntity(
         endName = endName, endLatitude = endLat, endLongitude = endLng,
         distanceMeters = distanceMeters, pausedMillis = pausedMillis, pausedAt = pausedAt,
         pauseCount = pauseCount, pointCount = pointCount, mockCount = mockCount, updatedAt = updatedAt,
+        checkInAt = checkInAt, checkInPlace = checkInPlace, checkOutAt = checkOutAt, checkOutPlace = checkOutPlace,
+        insideMillis = insideMillis, otMillis = otMillis, otApproved = otApproved,
     )
 }
 

@@ -69,6 +69,8 @@ data class Place(
     val longitude: Double,
     val radiusMeters: Double,
     val address: String? = null,
+    /** Being inside this place counts as being at work (attendance / overtime). */
+    val attendance: Boolean = false,
 )
 
 /** A company's own tracking settings (edited by its administrator). */
@@ -78,6 +80,7 @@ data class AppConfig(
     val minStayMinutes: Int = 5,
     val maxAccuracyMeters: Double = 50.0,
     val schedule: WorkSchedule = WorkSchedule(),
+    val attendance: AttendanceSettings = AttendanceSettings(),
 )
 
 /** Latest position and device health of one employee (Firestore live/{uid}). */
@@ -96,6 +99,9 @@ data class LiveState(
     val appVersion: String?,
     val updatedAt: Long,
     val dayStartedAt: Long? = null,
+    /** Inside an attendance zone right now (null = the phone did not report it). */
+    val inZone: Boolean? = null,
+    val zoneName: String? = null,
 ) {
     fun isStale(now: Long): Boolean = status.isOnDuty && now - updatedAt > STALE_AFTER_MS
 
@@ -123,6 +129,16 @@ data class Workday(
     val pointCount: Int,
     val mockCount: Int,
     val updatedAt: Long = 0L,
+    // ---- Attendance (filled while inside an attendance zone) ----
+    val checkInAt: Long? = null,
+    val checkInPlace: String? = null,
+    val checkOutAt: Long? = null,
+    val checkOutPlace: String? = null,
+    /** Time spent inside attendance zones. */
+    val insideMillis: Long = 0,
+    /** Time inside a zone after the scheduled end time (+ grace). */
+    val otMillis: Long = 0,
+    val otApproved: Boolean = false,
 ) {
     /** Time on duty, excluding pauses. */
     fun activeMillis(now: Long): Long {

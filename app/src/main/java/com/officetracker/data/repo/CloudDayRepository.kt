@@ -36,6 +36,14 @@ class CloudDayRepository(private val db: FirebaseFirestore) {
             .sortedBy { it.date }
     }.mapError()
 
+    /** Administrator: approves (or un-approves) the overtime recorded on one day. */
+    suspend fun setOtApproved(uid: String, date: String, approved: Boolean): Result<Unit> = runCatching {
+        Paths.day(db, uid, date).update(
+            mapOf("otApproved" to approved, "updatedAt" to System.currentTimeMillis())
+        ).await()
+        Unit
+    }.mapError()
+
     suspend fun fetchStayCount(uid: String, date: String): Int = runCatching {
         Paths.day(db, uid, date).collection(Paths.STAYS).get().await().size()
     }.getOrDefault(0)

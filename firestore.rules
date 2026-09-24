@@ -128,6 +128,14 @@ service cloud.firestore {
         || (isAdminOf(resource.data.get('companyId', '')) && uid != request.auth.uid);
 
       // Workdays, visits and GPS track chunks.
+      match /days/{date} {
+        // Administrators may approve overtime on their own staff's days - nothing else.
+        allow update: if isActiveUser() && me().role == 'ADMIN'
+          && get(userPath(uid)).data.get('companyId', '') == me().companyId
+          && companyUsable(me().companyId)
+          && request.resource.data.otApproved is bool
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['otApproved', 'updatedAt']);
+      }
       match /days/{date}/{document=**} {
         allow read: if isSelf(uid) || isSuper()
           || (isActiveUser() && me().role == 'ADMIN' && get(userPath(uid)).data.get('companyId', '') == me().companyId);

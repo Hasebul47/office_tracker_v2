@@ -54,6 +54,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.officetracker.AppContainer
 import com.officetracker.core.model.DayDetail
+import com.officetracker.core.model.Attendance
+import com.officetracker.ui.components.AttendanceCard
 import com.officetracker.core.model.PlaceCategory
 import com.officetracker.core.model.Stay
 import com.officetracker.core.model.Timeline
@@ -117,6 +119,7 @@ class TodayViewModel(private val c: AppContainer, private val uid: String) : Vie
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val config = c.org.config
+    val places = c.org.places
     val pendingUploads: StateFlow<Int> = c.workdays.observePendingUploads(uid)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
@@ -152,6 +155,7 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
     val vm = appViewModel(key = "today-${profile.uid}") { TodayViewModel(it, profile.uid) }
     val detail by vm.detail.collectAsStateWithLifecycle()
     val config by vm.config.collectAsStateWithLifecycle()
+    val places by vm.places.collectAsStateWithLifecycle()
     val pending by vm.pendingUploads.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val now = rememberNow(15_000)
@@ -187,6 +191,14 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
     }
 
     val autoSchedule = profile.effectiveSchedule(config.schedule)?.takeIf { features.scheduler }
+    // Where the phone is right now, from the last recorded fix (works offline).
+    val lastFix = d.route.lastOrNull()
+    val currentZone = remember(lastFix, places) {
+        lastFix?.let { Attendance.zoneAt(places, it.latitude, it.longitude) }
+    }
+    val inZone: Boolean? = if (lastFix == null) null else currentZone != null
+    val zoneName = currentZone?.name
+    val punchWords = features.attendance && config.attendance.enabled
     var autostartHidden by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
@@ -239,6 +251,7 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
             WorkdayCard(
                 day = day, status = status, now = now, busy = vm.busy,
                 locked = autoSchedule?.let { it.enforce && it.isWithinHours(now, Dates.zone) } == true,
+                punchWords = punchWords,
                 onStart = { pendingAction = DayAction.START; ensureLocation() },
                 onPause = { vm.act(DayAction.PAUSE) },
                 onResume = { pendingAction = DayAction.RESUME; ensureLocation() },
@@ -277,6 +290,14 @@ fun TodayScreen(profile: UserProfile, onOpenHistory: () -> Unit) {
                 distanceMeters = d.effectiveDistance(),
                 lateMinutes = day?.let { schedule?.lateMinutes(it.startedAt, Dates.zone) } ?: 0,
             )
+        }
+        if (features.attendance && config.attendance.enabled) {
+            item {
+                AttendanceCard(
+                    day = day, settings = config.attendance, showOt = features.overtime,
+                    inZone = inZone, zoneName = zoneName,
+                )
+            }
         }
         item { DayMapCard(d) }
         item {
@@ -347,6 +368,7 @@ private fun WorkdayCard(
     now: Long,
     busy: DayAction?,
     locked: Boolean,
+    punchWords: Boolean,
     onStart: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
@@ -382,7 +404,11 @@ private fun WorkdayCard(
             Spacer(Modifier.height(16.dp))
             when (status) {
                 WorkStatus.NOT_STARTED, WorkStatus.ENDED -> LoadingButton(
-                    text = if (status == WorkStatus.ENDED) "Start again" else "Start my day",
+                    text = when {
+                        status == WorkStatus.ENDED -> if (punchWords) "Punch in again" else "Start again"
+                        punchWords -> "Punch in"
+                        else -> "Start my day"
+                    },
                     icon = Icons.Default.PlayArrow, loading = busy == DayAction.START, onClick = onStart,
                     modifier = Modifier.fillMaxWidth(), containerColor = Brand.Success,
                 )
@@ -396,7 +422,8 @@ private fun WorkdayCard(
                         Text("Pause")
                     }
                     LoadingButton(
-                        text = "End day", icon = Icons.Default.Stop, loading = busy == DayAction.END, onClick = onEnd,
+                        text = if (punchWords) "Punch out" else "End day", icon = Icons.Default.Stop,
+                        loading = busy == DayAction.END, onClick = onEnd,
                         modifier = Modifier.weight(1f), containerColor = Brand.Danger, enabled = !locked,
                     )
                 }
@@ -406,7 +433,8 @@ private fun WorkdayCard(
                         modifier = Modifier.weight(1f), containerColor = Brand.Success,
                     )
                     LoadingButton(
-                        text = "End day", icon = Icons.Default.Stop, loading = busy == DayAction.END, onClick = onEnd,
+                        text = if (punchWords) "Punch out" else "End day", icon = Icons.Default.Stop,
+                        loading = busy == DayAction.END, onClick = onEnd,
                         modifier = Modifier.weight(1f), containerColor = Brand.Danger,
                     )
                 }

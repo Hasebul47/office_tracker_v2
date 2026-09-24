@@ -39,6 +39,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import com.officetracker.ui.components.StatusPill
+import com.officetracker.ui.theme.Brand
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -115,7 +118,7 @@ fun PlacesScreen() {
         topBar = { TopAppBar(title = { Text("Places") }) },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = { editing = Place("", "", PlaceCategory.OFFICE, Double.NaN, Double.NaN, 100.0) },
+                onClick = { editing = Place("", "", PlaceCategory.OFFICE, Double.NaN, Double.NaN, 100.0, attendance = true) },
                 icon = { Icon(Icons.Default.Add, null) }, text = { Text("Add place") },
             )
         },
@@ -156,7 +159,13 @@ fun PlacesScreen() {
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text(p.name, style = MaterialTheme.typography.titleSmall)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(p.name, style = MaterialTheme.typography.titleSmall)
+                                        if (p.attendance) {
+                                            Spacer(Modifier.width(6.dp))
+                                            StatusPill("Attendance", Brand.Success)
+                                        }
+                                    }
                                     Text(
                                         "${p.category.label} · ${p.radiusMeters.toInt()} m" + (p.address?.let { " · $it" } ?: ""),
                                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -189,6 +198,7 @@ private fun PlaceEditor(initial: Place, vm: PlacesViewModel, onDismiss: () -> Un
     var name by remember { mutableStateOf(initial.name) }
     var category by remember { mutableStateOf(initial.category) }
     var radius by remember { mutableDoubleStateOf(initial.radiusMeters) }
+    var attendance by remember { mutableStateOf(initial.attendance) }
     var lat by remember { mutableDoubleStateOf(initial.latitude) }
     var lng by remember { mutableDoubleStateOf(initial.longitude) }
     var start by remember { mutableStateOf(if (initial.latitude.isNaN()) null else initial.latitude to initial.longitude) }
@@ -241,6 +251,16 @@ private fun PlaceEditor(initial: Place, vm: PlacesViewModel, onDismiss: () -> Un
                     }
                     OutlinedTextField(name, { name = it.take(60) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     CategoryChips(category) { category = it }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Attendance zone", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Punching in is allowed here, and time inside counts as attendance / overtime",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(checked = attendance, onCheckedChange = { attendance = it })
+                    }
                     Text("Area radius: ${radius.toInt()} m", style = MaterialTheme.typography.labelLarge)
                     Slider(
                         value = radius.toFloat(), onValueChange = { radius = it.toDouble() },
@@ -252,7 +272,13 @@ private fun PlaceEditor(initial: Place, vm: PlacesViewModel, onDismiss: () -> Un
                         onClick = {
                             scope.launch {
                                 val address = vm.address(lat, lng)
-                                vm.save(initial.copy(name = name.trim(), category = category, radiusMeters = radius, latitude = lat, longitude = lng, address = address), onDismiss)
+                                vm.save(
+                                    initial.copy(
+                                        name = name.trim(), category = category, radiusMeters = radius,
+                                        latitude = lat, longitude = lng, address = address, attendance = attendance,
+                                    ),
+                                    onDismiss,
+                                )
                             }
                         },
                     )

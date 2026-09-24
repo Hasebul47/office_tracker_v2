@@ -85,6 +85,7 @@ import com.officetracker.ui.components.StatusPill
 import com.officetracker.ui.components.rememberNow
 import com.officetracker.ui.components.statusColor
 import com.officetracker.ui.components.statusLabel
+import com.officetracker.ui.components.zoneLabel
 import com.officetracker.ui.history.MonthSwitcher
 import com.officetracker.ui.theme.Brand
 import kotlinx.coroutines.async
@@ -149,7 +150,10 @@ class TeamViewModel(private val c: AppContainer, private val companyId: String) 
                         )
                     }
                 }.awaitAll()
-                val file = c.reports.teamReport(month, rows, c.org.config.value.ratePerKm)
+                val file = c.reports.teamReport(
+                    month, rows, c.org.config.value.ratePerKm,
+                    c.org.config.value.attendance.takeIf { c.org.features.value.attendance },
+                )
                 onReady(c.reports.shareIntent(file, "Team report ${Dates.month(month)}"))
             } catch (e: Exception) {
                 message = e.message ?: "Could not build the report."
@@ -358,6 +362,7 @@ private fun MemberCard(m: TeamMember, now: Long, showFakeGps: Boolean, schedule:
                 Text(
                     listOfNotNull(
                         m.profile.department.takeIf { it.isNotBlank() },
+                        l?.zoneLabel(),
                         l?.takeIf { it.status.isOnDuty }?.placeName,
                         l?.let { Dates.ago(it.updatedAt, now) },
                     ).joinToString(" · "),

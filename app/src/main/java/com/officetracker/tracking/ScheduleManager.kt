@@ -39,6 +39,16 @@ class ScheduleManager(
         return s.enforce && s.isWithinHours(System.currentTimeMillis(), Dates.zone)
     }
 
+    /**
+     * Working hours used for attendance and overtime. Unlike [effective] this ignores the
+     * auto start/end feature switch: a company can count overtime without automatic tracking.
+     */
+    fun workingHours(): WorkSchedule? {
+        val profile = auth.currentProfile ?: return null
+        val company = org.currentCompany ?: return null
+        return profile.effectiveSchedule(company.settings.schedule)
+    }
+
     fun canScheduleExact(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarms?.canScheduleExactAlarms() == true
 
@@ -75,11 +85,11 @@ class ScheduleManager(
             }
             // Inside working hours, nothing recorded yet today: start.
             s.autoStart && open == null && s.isWithinHours(now, Dates.zone) && !workdays.hasLocalDay(uid, today) -> {
-                tracking.startDay().fold({ "started" }, { it.message })
+                tracking.startDay(manual = false).fold({ "started" }, { it.message })
             }
             // Locked schedule: a paused day during working hours is resumed.
             s.enforce && open?.status == com.officetracker.core.model.WorkStatus.PAUSED && s.isWithinHours(now, Dates.zone) -> {
-                tracking.resume().fold({ "resumed" }, { null })
+                tracking.resume(manual = false).fold({ "resumed" }, { null })
             }
             else -> null
         }

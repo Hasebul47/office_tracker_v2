@@ -4,6 +4,10 @@ import android.content.Context
 import androidx.room.withTransaction
 import com.officetracker.BuildConfig
 import com.officetracker.core.model.LiveState
+import com.officetracker.core.model.Attendance
+import com.officetracker.core.model.AttendanceSettings
+import com.officetracker.core.model.WorkSchedule
+import com.officetracker.core.util.Dates
 import com.officetracker.core.model.PlaceCategory
 import com.officetracker.core.model.WorkStatus
 import com.officetracker.data.local.AppDatabase
@@ -39,6 +43,7 @@ class TrackingProcessor(
     private val namer: PlaceNamer,
     private val sync: SyncScheduler,
     private val locationClient: LocationClient,
+    private val scheduleProvider: () -> WorkSchedule? = { null },
 ) {
     private val dao = db.trackerDao()
     private val filter = LocationFilter()
@@ -49,6 +54,7 @@ class TrackingProcessor(
     private var lastSample: LocationSample? = null
     private var storedSinceSync = 0
     private var currentPlace: String? = null
+    private var currentZone: String? = null
 
     /** Rebuild in-memory state after the service (re)starts. */
     suspend fun restore() {
@@ -149,6 +155,20 @@ class TrackingProcessor(
                     }
                 }
             }
+            // ---- Attendance: time inside a geofenced office / site, and overtime ----
+            val settings = org.config.value.attendance
+            val features = org.features.value
+            val attendanceOn = features.attendance && settings.enabled
+            val zone = if (attendanceOn) Attendance.zoneAt(org.places.value, sample.latitude, sample.longitude) else null
+            currentZone = zone?.name
+            // Gap between fixes inside the zone, capped so a long signal loss cannot inflate hours.
+            val insideDelta = if (zone != null && fresh.zoneSince != null) {
+                (sample.time - fresh.zoneSince).coerceIn(0L, 15 * 60_000L)
+            } else 0L
+            val otDelta = if (
+                insideDelta > 0 && features.overtime && settings.otEnabled && isOvertime(sample.time, settings)
+            ) insideDelta else 0L
+
             // No location was available when the day started: the first good fix becomes the start.
             val missingStart = fresh.startLat == null || fresh.startLng == null
             if (missingStart) needsStartName = true
@@ -159,6 +179,13 @@ class TrackingProcessor(
                 mockCount = fresh.mockCount + if (sample.mock) 1 else 0,
                 startLat = if (missingStart) sample.latitude else fresh.startLat,
                 startLng = if (missingStart) sample.longitude else fresh.startLng,
+                checkInAt = fresh.checkInAt ?: zone?.let { sample.time },
+                checkInPlace = fresh.checkInPlace ?: zone?.name,
+                checkOutAt = if (zone != null) sample.time else fresh.checkOutAt,
+                checkOutPlace = if (zone != null) zone.name else fresh.checkOutPlace,
+                insideMillis = fresh.insideMillis + insideDelta,
+                otMillis = fresh.otMillis + otDelta,
+                zoneSince = if (zone != null) sample.time else null,
                 updatedAt = System.currentTimeMillis(), dirty = true,
             )
             dao.upsertWorkday(updated)
@@ -226,6 +253,8 @@ class TrackingProcessor(
                 batteryPercent = health.batteryPercent,
                 charging = health.charging,
                 gpsEnabled = locationClient.isLocationEnabled(),
+                inZone = if (org.features.value.attendance) currentZone != null else null,
+                zoneName = currentZone,
                 mockLocation = sample?.mock ?: false,
                 distanceMeters = day.distanceMeters,
                 appVersion = BuildConfig.VERSION_NAME,
@@ -242,9 +271,24 @@ class TrackingProcessor(
         detector.minDwellMillis = c.minStayMinutes * 60_000L
     }
 
+    /**
+     * Overtime counts after the scheduled end time plus the grace period. A day that is not a
+     * working day counts entirely as overtime.
+     */
+    private fun isOvertime(time: Long, settings: AttendanceSettings): Boolean {
+        val schedule = scheduleProvider()?.takeIf { it.enabled } ?: return false
+        val at = java.time.Instant.ofEpochMilli(time).atZone(Dates.zone)
+        if (!schedule.isWorkDay(at.toLocalDate())) return true
+        val minute = at.hour * 60 + at.minute
+        // After the end time, or in the small hours of the night shift that follows it.
+        return minute >= schedule.endMinute + settings.otGraceMinutes || minute < EARLY_MORNING_END
+    }
+
     private fun mode(): MotionMode = if (detector.open != null) MotionMode.STATIONARY else MotionMode.MOVING
 
     private companion object {
         const val LIVE_INTERVAL_MS = 60_000L
+        /** Minutes after midnight still counted as the previous evening's overtime. */
+        const val EARLY_MORNING_END = 4 * 60
     }
 }

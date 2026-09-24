@@ -56,6 +56,7 @@ import com.officetracker.core.model.effectiveDistance
 import com.officetracker.core.util.Dates
 import com.officetracker.ui.appViewModel
 import com.officetracker.ui.components.DayMapCard
+import com.officetracker.ui.components.AttendanceCard
 import com.officetracker.ui.components.DayStats
 import com.officetracker.ui.components.EditStayDialog
 import com.officetracker.ui.components.EmptyState
@@ -230,6 +231,13 @@ private fun DayBody(detail: DayDetail, onRelabel: ((Stay, String, PlaceCategory)
             lateMinutes = schedule.lateMinutes(day.startedAt, Dates.zone),
         )
         DayEnds(day)
+        val features = rememberFeatures().value
+        if (features.attendance && config.attendance.enabled) {
+            AttendanceCard(
+                day = day, settings = config.attendance, showOt = features.overtime,
+                inZone = null, zoneName = null,
+            )
+        }
         DayMapCard(detail, fitKey = day.date)
         SectionTitle("Visits")
         if (timeline.isEmpty()) {

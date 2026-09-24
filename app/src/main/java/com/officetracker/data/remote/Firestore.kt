@@ -3,6 +3,7 @@ package com.officetracker.data.remote
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.officetracker.core.model.AppConfig
+import com.officetracker.core.model.AttendanceSettings
 import com.officetracker.core.model.Billing
 import com.officetracker.core.model.Company
 import com.officetracker.core.model.Features
@@ -96,6 +97,7 @@ object Mappers {
             longitude = lng,
             radiusMeters = doc.double("radius") ?: 100.0,
             address = doc.getString("address"),
+            attendance = doc.getBoolean("attendance") ?: false,
         )
     }
 
@@ -106,6 +108,7 @@ object Mappers {
         "lng" to p.longitude,
         "radius" to p.radiusMeters,
         "address" to p.address,
+        "attendance" to p.attendance,
     )
 
     fun config(m: Map<*, *>?): AppConfig {
@@ -118,6 +121,7 @@ object Mappers {
             minStayMinutes = num("minStayMinutes")?.toInt() ?: d.minStayMinutes,
             maxAccuracyMeters = num("maxAccuracyMeters")?.toDouble() ?: d.maxAccuracyMeters,
             schedule = WorkSchedule.fromMap(m["schedule"] as? Map<*, *>) ?: d.schedule,
+            attendance = AttendanceSettings.fromMap(m["attendance"] as? Map<*, *>),
         )
     }
 
@@ -127,6 +131,7 @@ object Mappers {
         "minStayMinutes" to c.minStayMinutes,
         "maxAccuracyMeters" to c.maxAccuracyMeters,
         "schedule" to c.schedule.toMap(),
+        "attendance" to c.attendance.toMap(),
     )
 
     fun live(doc: DocumentSnapshot): LiveState = LiveState(
@@ -144,6 +149,8 @@ object Mappers {
         appVersion = doc.getString("appVersion"),
         updatedAt = doc.long("updatedAt") ?: 0L,
         dayStartedAt = doc.long("dayStartedAt"),
+        inZone = doc.getBoolean("inZone"),
+        zoneName = doc.getString("zoneName"),
     )
 
     fun liveMap(s: LiveState): Map<String, Any?> = mapOf(
@@ -159,9 +166,13 @@ object Mappers {
         "distanceMeters" to s.distanceMeters,
         "appVersion" to s.appVersion,
         "updatedAt" to s.updatedAt,
-    ) + (s.dayStartedAt?.let { mapOf("dayStartedAt" to it) } ?: emptyMap())
-    // dayStartedAt is only written when known, so a status-only update (pause / end) merged
-    // into live/{uid} does not erase the start time the admin's late / "not started" marks use.
+    ) + buildMap {
+        // Only written when known, so a status-only update (pause / end) merged into live/{uid}
+        // does not erase what the admin's attendance and late marks are based on.
+        s.dayStartedAt?.let { put("dayStartedAt", it) }
+        s.inZone?.let { put("inZone", it) }
+        s.zoneName?.let { put("zoneName", it) }
+    }
 
     fun workday(uid: String, doc: DocumentSnapshot): Workday? {
         if (!doc.exists()) return null
@@ -184,6 +195,13 @@ object Mappers {
             pointCount = doc.int("pointCount") ?: 0,
             mockCount = doc.int("mockCount") ?: 0,
             updatedAt = doc.long("updatedAt") ?: 0L,
+            checkInAt = doc.long("checkInAt"),
+            checkInPlace = doc.getString("checkInPlace"),
+            checkOutAt = doc.long("checkOutAt"),
+            checkOutPlace = doc.getString("checkOutPlace"),
+            insideMillis = doc.long("insideMillis") ?: 0L,
+            otMillis = doc.long("otMillis") ?: 0L,
+            otApproved = doc.getBoolean("otApproved") ?: false,
         )
     }
 
@@ -205,6 +223,13 @@ object Mappers {
         "pointCount" to w.pointCount,
         "mockCount" to w.mockCount,
         "updatedAt" to updatedAt,
+        "checkInAt" to w.checkInAt,
+        "checkInPlace" to w.checkInPlace,
+        "checkOutAt" to w.checkOutAt,
+        "checkOutPlace" to w.checkOutPlace,
+        "insideMillis" to w.insideMillis,
+        "otMillis" to w.otMillis,
+        // otApproved is written by administrators in the cloud; phones never overwrite it.
     )
 
     fun stay(doc: DocumentSnapshot): Stay? {

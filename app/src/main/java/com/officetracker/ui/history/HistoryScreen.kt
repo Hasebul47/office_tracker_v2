@@ -121,7 +121,10 @@ class HistoryViewModel(private val c: AppContainer, private val uid: String) : V
     fun schedule(profile: UserProfile): WorkSchedule? = profile.effectiveSchedule(c.org.config.value.schedule)
 
     fun export(profile: UserProfile, s: MonthState) = c.reports.shareIntent(
-        c.reports.monthReport(profile, s.month, s.days, s.visits, c.org.config.value.ratePerKm, schedule(profile)),
+        c.reports.monthReport(
+            profile, s.month, s.days, s.visits, c.org.config.value.ratePerKm, schedule(profile),
+            c.org.config.value.attendance.takeIf { c.org.features.value.attendance },
+        ),
         "Monthly report ${Dates.month(s.month)}",
     )
 }

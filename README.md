@@ -5,6 +5,25 @@ start their workday, the phone records their route and visits, company admins ma
 and **you, the platform owner (super admin)**, manage companies, plans and subscriptions. Any change
 you make reaches every affected phone within seconds.
 
+## New in 2.2: attendance punching and overtime
+
+* **Attendance zones.** In **Places**, switch on **Attendance zone** for each office, factory or site
+  (name, map position and radius). Being inside one counts as being at work.
+* **Punching.** With attendance on, Today's buttons read **Punch in** / **Punch out**. If the company
+  requires it, punching in is refused outside a zone and the message says how far away the nearest office is.
+* **Recorded automatically:** first and last time inside a zone (punch in / punch out), total **time at office**,
+  and the zone's name. Gaps in the signal are capped at 15 minutes so hours cannot be inflated.
+* **Overtime.** Time inside a zone after the scheduled end time (plus a grace period) counts as OT; a full
+  non-working day counts entirely as OT. The admin sets the grace period, the minimum OT, a daily cap,
+  the hourly rate, and whether OT needs approval. OT works with or without automatic start/end.
+* **Approval.** With approval on, the admin opens the employee's page, picks the day, and taps **Approve**.
+  Only approved OT is paid in reports.
+* **Reports** gain Status (Present / Late / Absent / Weekly off / No punch), Punch in, Punch out,
+  Time at office, OT hours and OT pay, in the employee's monthly report and in the team report.
+* **Live team list** shows "At Head Office" or "Outside office" next to each person.
+* **Super admin switches:** *Attendance punching (geofence)* and *Overtime (OT)* are per-company feature
+  switches, alongside the existing ones, and apply to every phone within seconds.
+
 ## New in 2.1
 
 * **Tracking fixes.**

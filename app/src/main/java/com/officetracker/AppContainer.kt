@@ -73,7 +73,8 @@ class AppContainer(private val context: Context) {
     val scheduler: ScheduleManager by lazy { ScheduleManager(context, auth, org) }
     private val catchUpLock = kotlinx.coroutines.sync.Mutex()
 
-    fun newProcessor(uid: String) = TrackingProcessor(context, uid, db, org, namer, sync, locationClient)
+    fun newProcessor(uid: String) =
+        TrackingProcessor(context, uid, db, org, namer, sync, locationClient) { scheduler.workingHours() }
 
     /** Keeps shared listeners and background work in step with the signed-in user. */
     fun start() {
